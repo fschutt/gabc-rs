@@ -1,0 +1,55 @@
+name: Pages
+
+# The test page: the WebAssembly build of gabc-rs with a text box and a preview.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - src/**
+      - wasm/**
+      - demo/**
+      - assets/fonts/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the module
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo build --release --target wasm32-unknown-unknown -p gabc-wasm
+      - name: Assemble the page
+        run: |
+          mkdir -p site
+          cp demo/index.html site/
+          cp target/wasm32-unknown-unknown/release/gabc_wasm.wasm site/
+          cp assets/fonts/gabc-neumes.ttf assets/fonts/gabc-music.ttf assets/fonts/gabc-music-OFL.txt site/
+          cp third_party/exsurge/LICENSE site/gabc-neumes-LICENSE.txt
+          ls -la site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

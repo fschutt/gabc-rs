@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gabc-rs: chant and hymn notation</title>
+<style>
+  @font-face { font-family: "Gabc Neumes"; src: url("gabc-neumes.ttf") format("truetype"); font-display: block; }
+  @font-face { font-family: "Gabc Music"; src: url("gabc-music.ttf") format("truetype"); font-display: block; }
+  :root {
+    --paper: #fbfaf7; --ink: #1b1b1b; --muted: #6b675f; --line: #d9d5cc; --panel: #ffffff;
+    --accent: #8a2a1c; --bad: #a3261a; --warn: #8a6100;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper: #17171a; --ink: #ece9e2; --muted: #a09b90; --line: #3a3a40; --panel: #1f1f23;
+            --accent: #e0907f; --bad: #ff8f80; --warn: #e8c069; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink);
+         font: 15px/1.5 Georgia, "Iowan Old Style", "Times New Roman", serif; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1.25rem;
+           padding: 0.9rem 1.25rem; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 1.15rem; font-weight: normal; margin: 0; letter-spacing: 0.01em; }
+  h1 small { color: var(--muted); font-size: 0.85rem; margin-left: 0.5rem; }
+  header label { color: var(--muted); font-size: 0.85rem; }
+  select, input[type="range"], button { font: inherit; color: inherit; }
+  select, button { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 0.2rem 0.55rem; }
+  button { cursor: pointer; }
+  button:hover, select:hover { border-color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 1.25rem; padding: 1.25rem; }
+  @media (max-width: 860px) { main { grid-template-columns: minmax(0, 1fr); } }
+  textarea { width: 100%; min-height: 24rem; resize: vertical; padding: 0.75rem; background: var(--panel);
+             color: var(--ink); border: 1px solid var(--line); border-radius: 4px;
+             font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; tab-size: 2; }
+  #problems { list-style: none; margin: 0.75rem 0 0; padding: 0; font-size: 0.9rem; }
+  #problems li { padding: 0.15rem 0; cursor: pointer; }
+  #problems .error { color: var(--bad); }
+  #problems .warning { color: var(--warn); }
+  #problems .fine { color: var(--muted); cursor: default; }
+  #problems code { font: 12px ui-monospace, Menlo, monospace; opacity: 0.8; }
+  #preview { background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+             padding: 1.5rem; min-height: 24rem; overflow: hidden; }
+  #preview h2 { font-size: 1.1rem; font-weight: normal; margin: 0 0 1rem; }
+  #preview .empty { color: var(--muted); font-style: italic; }
+  .tools { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; align-items: center; }
+  .tools span { color: var(--muted); font-size: 0.85rem; }
+  footer { padding: 0 1.25rem 2rem; color: var(--muted); font-size: 0.85rem; max-width: 60rem; }
+  footer a { color: inherit; }
+  @media print {
+    header, #source, .tools, footer { display: none; }
+    main { display: block; padding: 0; }
+    #preview { border: 0; padding: 0; }
+    body { background: #fff; color: #000; }
+  }
+</style>
+<style id="score-style"></style>
+</head>
+<body>
+<header>
+  <h1>gabc-rs <small>chant and hymn notation, checked and drawn</small></h1>
+  <label>Example
+    <select id="example">
+      <option value="chant">Chant: Deus misereatur</option>
+      <option value="hymn">Hymn: Old Hundredth</option>
+      <option value="wrong">A score with mistakes</option>
+    </select>
+  </label>
+  <label>Notation
+    <select id="language">
+      <option value="0">GABC (chant)</option>
+      <option value="1">ABC (hymn)</option>
+    </select>
+  </label>
+  <label>Size <input id="size" type="range" min="22" max="56" value="36"></label>
+</header>
+<main>
+  <section id="source">
+    <textarea id="input" spellcheck="false" aria-label="Notation source"></textarea>
+    <ul id="problems" aria-live="polite"></ul>
+  </section>
+  <section>
+    <div id="preview"><p class="empty">Loading…</p></div>
+    <div class="tools">
+      <button id="save" type="button">Download HTML</button>
+      <button id="print" type="button">Print / save as PDF</button>
+      <span id="status"></span>
+    </div>
+  </section>
+</main>
+<footer>
+  The score is laid out again whenever the text, the size or the width of the window changes.
+  Chant is written in <a href="https://gregorio-project.github.io/gabc/">GABC</a>, hymns in a subset of
+  <a href="https://abcnotation.com/wiki/abc:standard:v2.1">ABC</a>.
+  Source and licences: <a href="https://github.com/fschutt/gabc-rs">github.com/fschutt/gabc-rs</a>.
+  The chant example is from <a href="https://gregobase.selapa.net">GregoBase</a> (transcribed by Andrew Hinkley, CC0).
+</footer>
+<script>
+"use strict";
+const EXAMPLES = {
+  chant: { language: "0", source: `name: Deus misereatur;
+office-part: Introitus;
+mode: 3;
+%%
+(c4) DE(g)us(gd) *() mi(d)se(e)re(f)á(gh)tur(h) no(ghhg)stri,(g.) (;) et(g) be(g)ne(hj)dí(jjj)cat(g) no(high)bis :(h.) (:) il(gh)lú(j)mi(i)net(jk) vul(k)tum(kj) su(k)um(g.) su(hj)per(j) nos,(ijhhg.) (;) et(g) mi(h)se(gf)re(gh)á(h)tur(h!jj) no(h_ghvG'F)stri :(f.) (:) ut(f) co(fg~)gno(g)scá(ghGF'h)mus(h) in(h) ter(hih)ra(g.) vi(h)am(j) tu(ikjj)am,(ji..) (;) in(j) ó(jjk)mni(hg)bus(h) gén(gf)ti(gh)bus(h.) (,) sa(h)lu(h)tá(j.h!iw!jvIG'h)re(g.) tu(egF'E)um.(e.) (::)
+` },
+  hymn: { language: "1", source: `X:1
+T:Old Hundredth
+C:Genevan Psalter, 1551
+M:4/4
+L:1/4
+K:G
+G | G F E D | G A B2 |
+w: 1.~All peo-ple that on earth do dwell,
+B B B A | G c B A |
+w: sing to the Lord with cheer-ful voice;
+G A B A | G E F G |
+w: him serve with mirth, his praise forth tell,
+d B G A | c B A G |]
+w: come ye be-fore him and re-joice.
+` },
+  wrong: { language: "1", source: `X:1
+T:A tune with mistakes
+M:3/4
+L:1/4
+K:F
+F G A | B A | F3 |]
+w: Lo-bet den Her-ren
+[CEG]3 |]
+` },
+};
+
+const $ = (id) => document.getElementById(id);
+let wasm = null;
+
+function render(language, source, width, lyricSize) {
+  const bytes = new TextEncoder().encode(source);
+  const input = wasm.gabc_alloc(bytes.length);
+  new Uint8Array(wasm.memory.buffer, input, bytes.length).set(bytes);
+  const answer = wasm.gabc_render(language, input, bytes.length, width, lyricSize);
+  const at = Number(answer >> 32n), length = Number(answer & 0xffffffffn);
+  const json = new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, at, length));
+  wasm.gabc_free(input, bytes.length);
+  wasm.gabc_free(at, length);
+  return JSON.parse(json);
+}
+
+function title(language, source) {
+  const pattern = language === 1 ? /^T:\s*(.+)$/m : /^name:\s*([^;]+);/m;
+  const found = source.match(pattern);
+  return found ? found[1].trim() : "";
+}
+
+function update() {
+  if (!wasm) return;
+  const preview = $("preview");
+  const language = Number($("language").value);
+  const source = $("input").value;
+  const size = Number($("size").value);
+  const style = getComputedStyle(preview);
+  const inner = preview.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  const started = performance.now();
+  const result = render(language, source, Math.max(6, inner / size), 0.42);
+  const took = performance.now() - started;
+  $("score-style").textContent = result.style;
+  preview.style.setProperty("--gabc-size", size + "px");
+
+  const problems = $("problems");
+  problems.textContent = "";
+  for (const d of result.diagnostics) {
+    const item = document.createElement("li");
+    item.className = d.severity;
+    item.tabIndex = 0;
+    const code = document.createElement("code");
+    code.textContent = d.code;
+    item.append(`line ${d.line}, column ${d.column}: ${d.message} `, code);
+    const jump = () => jumpTo(d.line, d.column);
+    item.addEventListener("click", jump);
+    item.addEventListener("keydown", (e) => { if (e.key === "Enter") jump(); });
+    problems.append(item);
+  }
+  if (!result.diagnostics.length) {
+    const fine = document.createElement("li");
+    fine.className = "fine";
+    fine.textContent = "No problems found.";
+    problems.append(fine);
+  }
+
+  if (result.html) {
+    const heading = title(language, source);
+    preview.innerHTML = (heading ? "<h2></h2>" : "") + result.html;
+    if (heading) preview.querySelector("h2").textContent = heading;
+    $("status").textContent = `laid out in ${took.toFixed(1)} ms`;
+  } else {
+    preview.innerHTML = '<p class="empty">The score has errors (listed under the text) and is not drawn.</p>';
+    $("status").textContent = "";
+  }
+  $("save").disabled = $("print").disabled = !result.html;
+}
+
+function jumpTo(line, column) {
+  const input = $("input");
+  const lines = input.value.split("\n");
+  let offset = 0;
+  for (let i = 0; i < line - 1 && i < lines.length; i++) offset += lines[i].length + 1;
+  // Columns count characters, the text area counts UTF-16 units; close enough to land on the spot.
+  input.focus();
+  input.setSelectionRange(offset + column - 1, offset + column);
+}
+
+function load(name) {
+  const example = EXAMPLES[name];
+  $("language").value = example.language;
+  $("input").value = example.source;
+  update();
+}
+
+function download() {
+  const preview = $("preview");
+  const page = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${document.title}</title><style>
+@font-face { font-family: "Gabc Neumes"; src: url("${new URL("gabc-neumes.ttf", location.href)}") format("truetype"); }
+@font-face { font-family: "Gabc Music"; src: url("${new URL("gabc-music.ttf", location.href)}") format("truetype"); }
+body { font: 15px Georgia, serif; margin: 2rem; --gabc-size: ${$("size").value}px; }
+h2 { font-size: 1.1rem; font-weight: normal; }
+${$("score-style").textContent}</style></head><body>${preview.innerHTML}</body></html>`;
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([page], { type: "text/html" }));
+  link.download = "score.html";
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+let pending = 0;
+const soon = () => { clearTimeout(pending); pending = setTimeout(update, 120); };
+$("input").addEventListener("input", soon);
+$("size").addEventListener("input", update);
+$("language").addEventListener("change", update);
+$("example").addEventListener("change", (e) => load(e.target.value));
+$("save").addEventListener("click", download);
+$("print").addEventListener("click", () => window.print());
+// Only a new width asks for a new layout; the height follows from the score.
+let lastWidth = 0;
+new ResizeObserver(() => {
+  const width = $("preview").clientWidth;
+  if (width !== lastWidth) { lastWidth = width; soon(); }
+}).observe($("preview"));
+
+WebAssembly.instantiateStreaming(fetch("gabc_wasm.wasm"), {})
+  .then(({ instance }) => { wasm = instance.exports; return document.fonts.ready; })
+  .then(() => load("chant"))
+  .catch((error) => {
+    $("preview").innerHTML = '<p class="empty"></p>';
+    $("preview").firstChild.textContent = "The notation module could not be loaded: " + error;
+  });
+</script>
+</body>
+</html>

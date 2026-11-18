@@ -1,0 +1,13 @@
+[package]
+name = "gabc-wasm"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "gabc-rs for the browser: check a score and draw it as HTML, with no JavaScript glue library"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+gabc-rs = { path = ".." }

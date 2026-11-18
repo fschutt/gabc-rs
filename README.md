@@ -2,11 +2,12 @@
 
 Gregorian chant notation (GABC) and metered hymns (ABC) rendered through one HTML+CSS string into PDF, PNG and the browser.
 
-**Status: early.** The parsers and the checker work. Chant and hymns are drawn in a first version: neumes on four lines, round notes on five, with clef, bars, lyrics and line breaks. Still to come: real text metrics, ties, slurs and beams, the drop cap, the WASM page.
+**Status: early.** The parsers and the checker work. Chant and hymns are drawn in a first version: neumes on four lines, round notes on five, with clef, bars, lyrics and line breaks. Still to come: real text metrics, ties, slurs and beams, the drop cap, PDF and PNG straight from the library.
 
 - `gabc check <files or directories>`: checks `.gabc` and `.abc` files and the notation blocks of Markdown files, and prints every problem as `path:line:col: error[E011]: message`.
 - `gabc html <file.gabc or file.abc>`: the score as an HTML document, which printpdf turns into a PDF and azul into a PNG.
 - `gabc_rs::render`: one notation block to the HTML of its score.
+- `wasm/` and `demo/`: the same for the browser, as a WebAssembly module with three plain exports and a test page with a text box and a preview: <https://fschutt.github.io/gabc-rs/>.
 - `gabc_rs::abc_layout`: a hymn on a five-line staff with its verses in rows.
 - `gabc_rs::neume`, `gabc_rs::layout`, `gabc_rs::html`: notes into neumes with their glyphs (a port of exsurge), syllables into lines, lines into HTML and CSS.
 - `gabc_rs::gabc::parse`: a strict GABC parser. It reports every problem with its position and still returns what it could read.

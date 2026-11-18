@@ -608,7 +608,9 @@ pub(crate) fn estimate_width(text: &str) -> f32 {
             c if c.is_uppercase() => 0.68,
             _ => 0.5,
         })
-        .sum()
+        .sum::<f32>()
+        // Rather a little too wide than text that runs into its neighbour.
+        * 1.06
 }
 
 #[cfg(test)]

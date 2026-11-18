@@ -8,7 +8,7 @@ description = "Gregorian chant (GABC) and hymn (ABC) notation to HTML, PDF and P
 [dependencies]
 
 [workspace]
-members = ["spike", "xtask"]
+members = ["spike", "xtask", "wasm"]
 
 # The azul + printpdf stack is large and this machine's disk is nearly full:
 # no debug info, and dependencies lightly optimized so layout and the CPU

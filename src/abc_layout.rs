@@ -113,8 +113,14 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
 
     // Inside a bar: each atom after the one before, and far enough that no text runs into
     // the text of the note before it in its row.
-    let gap = measure(" ").max(0.2) * size * 0.6;
+    // Between two words there is a space and a little more, since widths may be estimates;
+    // after a hyphen the next syllable may come close.
+    let word_gap = measure(" ").max(0.25) * size * 1.5;
+    let syllable_gap = 0.12 * size;
+    let gap = word_gap;
     let mut widths = Vec::new();
+    // Whether the text of each row ended with a hyphen: it carries over the bar line.
+    let mut hyphen: Vec<bool> = Vec::new();
     for bar in &mut bars {
         let mut x = 0.0f32;
         let mut text_end: Vec<f32> = Vec::new();
@@ -124,6 +130,7 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
                 let label = atom.labels.iter().find(|(r, _)| r == row).map_or(0.0, |(_, l)| label_width(l, measure, size));
                 let half = measure(text) * size / 2.0;
                 let end = text_end.get(*row).copied().unwrap_or(f32::MIN);
+                let gap = if hyphen.get(*row).copied().unwrap_or(false) { syllable_gap } else { word_gap };
                 start = start.max(end + gap + label + half - centre);
             }
             atom.x = start;
@@ -132,7 +139,11 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
                 if text_end.len() <= *row {
                     text_end.resize(*row + 1, f32::MIN);
                 }
+                if hyphen.len() <= *row {
+                    hyphen.resize(*row + 1, false);
+                }
                 text_end[*row] = start + centre + half;
+                hyphen[*row] = text.ends_with('-');
             }
             x = start + atom.width;
         }
