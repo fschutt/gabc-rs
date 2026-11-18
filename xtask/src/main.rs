@@ -3,6 +3,7 @@
 //! `cargo run -p xtask -- font` builds `assets/fonts/gabc-neumes.ttf` from the glyph outlines
 //! of exsurge (`third_party/exsurge/Exsurge.Glyphs.js`, MIT, © Fr. Matthew Spencer, OSJ).
 
+mod corpus;
 mod svg_path;
 
 use std::path::{Path, PathBuf};
@@ -68,11 +69,21 @@ const GLYPHS: &[(char, &str)] = &[
     ('\u{E023}', "Virgula"),
 ];
 
+const USAGE: &str = "usage: cargo run -p xtask -- font | corpus gregobase [--oracle <program>]";
+
 fn main() -> ExitCode {
     let task = std::env::args().nth(1).unwrap_or_default();
     let result = match task.as_str() {
         "font" => build_font(),
-        _ => Err(String::from("usage: cargo run -p xtask -- font")),
+        "corpus" if std::env::args().nth(2).as_deref() == Some("gregobase") => {
+            let args: Vec<String> = std::env::args().skip(3).collect();
+            match args.as_slice() {
+                [] => corpus::gregobase(&repo_root(), None),
+                [flag, program] if flag == "--oracle" => corpus::gregobase(&repo_root(), Some(program)),
+                _ => Err(String::from(USAGE)),
+            }
+        }
+        _ => Err(String::from(USAGE)),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
