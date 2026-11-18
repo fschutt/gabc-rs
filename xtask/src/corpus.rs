@@ -84,6 +84,8 @@ pub fn gregobase(root: &Path, oracle: Oracle) -> Result<(), String> {
     if matches!(oracle, Oracle::Program(_)) {
         let tsv = dir.join("gregobase-structure.tsv");
         std::fs::write(&tsv, report.structure_tsv()).map_err(|e| format!("{}: {e}", tsv.display()))?;
+        let tsv = dir.join("gregobase-centres.tsv");
+        std::fs::write(&tsv, report.centres_tsv()).map_err(|e| format!("{}: {e}", tsv.display()))?;
     }
     print!("{}", text.split("\n## Scores").next().unwrap_or(&text));
     println!("\nreport: {}", path.display());
@@ -402,6 +404,24 @@ impl Report {
             if let Some(tokens) = o.oracle.as_ref().and_then(|v| v.structure.as_ref()) {
                 let _ = writeln!(s, "{}\t{tokens}", o.id);
             }
+        }
+        s
+    }
+
+    /// Every different syllable of the library with the letters the oracle centres in it and
+    /// how often: text, centre, times. The data the centring rule is derived from.
+    fn centres_tsv(&self) -> String {
+        let mut counts: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+        for o in &self.outcomes {
+            for (text, centre) in o.oracle.iter().filter_map(|v| v.centres.as_ref()).flatten() {
+                if !centre.is_empty() {
+                    *counts.entry((text, centre)).or_default() += 1;
+                }
+            }
+        }
+        let mut s = String::from("text\tcentre\ttimes\n");
+        for ((text, centre), times) in counts {
+            let _ = writeln!(s, "{}\t{}\t{times}", text.replace(['\t', '\n'], " "), centre.replace(['\t', '\n'], " "));
         }
         s
     }

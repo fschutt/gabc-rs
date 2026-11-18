@@ -43,3 +43,4 @@ jobs:
             target/corpus/gregobase-report.md
             target/corpus/gregobase-verdicts.tsv
             target/corpus/gregobase-structure.tsv
+            target/corpus/gregobase-centres.tsv
