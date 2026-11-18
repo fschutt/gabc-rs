@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(html.matches("class=\"gabc-line\"").count(), 1);
         // Clef, three notes of which two are a podatus, and a dot.
         assert_eq!(html.matches("class=\"gabc-g\"").count(), 6);
-        assert!(html.contains("<i>KY</i>"), "{html}");
+        assert!(html.contains("<i>KY-</i>"), "{html}");
         assert!(html.contains("&lt;&amp;"), "{html}");
         assert!(html.contains('\u{E008}'), "the do clef");
         let doc = document(&engrave(&parsed.score, &Options::default()), "Kyrie", "Serif", "34px");

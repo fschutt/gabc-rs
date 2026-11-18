@@ -145,8 +145,9 @@ fn html(args: &[String]) -> ExitCode {
     if measure.is_none() {
         eprintln!("gabc: no --font-file given: the widths of the lyrics are estimated, not measured");
     }
-    let options = gabc_rs::layout::Options { width, measure, ..Default::default() };
     let is_abc = file.ends_with(".abc");
+    let options = if is_abc { gabc_rs::layout::Options::hymn(width) } else { gabc_rs::layout::Options::chant(width) };
+    let options = gabc_rs::layout::Options { measure, ..options };
     let (diagnostics, valid, engraving, title) = if is_abc {
         let parsed = abc::parse(&text);
         let engraving = gabc_rs::abc_layout::engrave(&parsed.tune, &options);

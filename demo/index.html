@@ -161,7 +161,9 @@ function update() {
   const style = getComputedStyle(preview);
   const inner = preview.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
   const started = performance.now();
-  const result = render(language, source, Math.max(6, inner / size), 0.42);
+  // The size of the words under the notes, as a part of the score's em: 0.32 under chant
+  // (as in exsurge), 0.42 under a hymn.
+  const result = render(language, source, Math.max(6, inner / size), language === 1 ? 0.42 : 0.32);
   const took = performance.now() - started;
   $("score-style").textContent = result.style;
   preview.style.setProperty("--gabc-size", size + "px");

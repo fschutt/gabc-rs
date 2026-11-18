@@ -126,6 +126,9 @@ fn write_glyph_table(root: &Path, metrics: &str) -> Result<(), String> {
          pub struct Metrics {\n\
          \x20   /// How wide the ink is, which is also the advance.\n\
          \x20   pub width: f32,\n\
+         \x20   /// Where the glyph's point of reference lies, from the left end of the ink: the\n\
+         \x20   /// middle of a note. Text is centred under it.\n\
+         \x20   pub origin: f32,\n\
          \x20   /// How far the ink reaches above the origin.\n\
          \x20   pub above: f32,\n\
          \x20   /// How far the ink reaches below the origin.\n\
@@ -145,7 +148,7 @@ fn write_glyph_table(root: &Path, metrics: &str) -> Result<(), String> {
     s.push_str(
         "        }\n    }\n\n\
          \x20   pub fn metrics(self) -> Metrics {\n\
-         \x20       let m = |width, above, below, align_right| Metrics { width, above, below, align_right };\n\
+         \x20       let m = |width, origin, above, below, align_right| Metrics { width, origin, above, below, align_right };\n\
          \x20       match self {\n",
     );
     s.push_str(metrics);
@@ -227,8 +230,9 @@ fn build_font() -> Result<(), String> {
             let em = |units: f64| units / SOURCE_UNITS_PER_EM;
             let _ = writeln!(
                 metrics,
-                "            Glyph::{name} => m({:.5}, {:.5}, {:.5}, {align_right}),",
+                "            Glyph::{name} => m({:.5}, {:.5}, {:.5}, {:.5}, {align_right}),",
                 em(width),
+                em(origin_x),
                 em(origin_y),
                 em(height - origin_y)
             );

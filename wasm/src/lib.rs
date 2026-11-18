@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn a_score_comes_back_as_json_with_its_html() {
-        let json = render(0, "name: Kyrie;\n%%\n(c4) KY(f)ri(gh)e(h.) (::)\n", 18.0, 0.42);
+        let json = render(0, "name: Kyrie;\n%%\n(c4) KY(f)ri(gh)e(h.) (::)\n", 18.0, 0.32);
         assert!(json.starts_with("{\"html\":\"<div class=\\\"gabc-score\\\">"), "{json}");
         assert!(json.ends_with("\"diagnostics\":[]}"), "{json}");
         let json = render(1, "X:1\nT:t\nM:3/4\nL:1/4\nK:F\nF G A |]\n", 18.0, 0.42);

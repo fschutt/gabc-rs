@@ -25,9 +25,29 @@ pub struct Options<'a> {
     pub measure: Option<&'a dyn Fn(&str) -> f32>,
 }
 
+/// The size of the lyrics under chant, as a part of the score's em: exsurge's text of 16 px
+/// on a staff whose em is 50 px.
+pub const CHANT_LYRIC_SIZE: f32 = 0.32;
+/// The size of the lyrics under a hymn. A choice of this crate: Bravura's metadata says
+/// nothing about text, and hymnals differ.
+pub const HYMN_LYRIC_SIZE: f32 = 0.42;
+
 impl Default for Options<'_> {
+    /// The options for chant at a width of 18 em.
     fn default() -> Self {
-        Options { width: 18.0, lyric_size: 0.42, measure: None }
+        Options::chant(18.0)
+    }
+}
+
+impl Options<'_> {
+    /// For chant at a line width in em, with estimated text widths.
+    pub fn chant(width: f32) -> Self {
+        Options { width, lyric_size: CHANT_LYRIC_SIZE, measure: None }
+    }
+
+    /// For a hymn at a line width in em, with estimated text widths.
+    pub fn hymn(width: f32) -> Self {
+        Options { width, lyric_size: HYMN_LYRIC_SIZE, measure: None }
     }
 }
 
@@ -179,11 +199,21 @@ struct Block {
     spans: Vec<Span>,
     /// The width of the notes.
     notes: f32,
-    /// The width of the text, in em of the score.
+    /// The point of the notes that the text is centred under: the middle of the first note,
+    /// or the middle of a bar.
+    origin: f32,
+    /// The room after the notes before the next ones.
+    trailing: f32,
+    /// The width of the text, in em of the score, and with a hyphen after it.
     text: f32,
-    /// How far the text starts to the left of the notes.
-    text_lead: f32,
-    starts_word: bool,
+    /// The point of the text that stands under `origin`, from the text's left edge.
+    centre: f32,
+    /// The syllable goes on in the next one: a hyphen may be needed after it.
+    allows_hyphen: bool,
+    /// The hyphen is needed: the next syllable could not be set right against this one.
+    hyphen: bool,
+    /// Holds nothing but a bar.
+    is_bar: bool,
     /// The first sounding pitch, for the custos of the line before.
     first_pitch: Option<u8>,
     /// A clef that takes effect here, to be repeated on later lines.
@@ -192,30 +222,58 @@ struct Block {
     only_clef: bool,
     /// A forced line break after this block.
     breaks: bool,
+    /// Where the notes start in their line.
+    x: f32,
+}
+
+impl Block {
+    fn has_text(&self) -> bool {
+        !self.spans.is_empty()
+    }
+
+    fn text_left(&self) -> f32 {
+        self.x + self.origin - self.centre
+    }
+
+    fn text_right(&self, hyphen_width: f32) -> f32 {
+        self.text_left() + self.text + if self.hyphen { hyphen_width } else { 0.0 }
+    }
+
+    fn notes_right(&self) -> f32 {
+        self.x + self.notes
+    }
 }
 
 /// Lays a score out in lines.
+///
+/// How a syllable is put against the one before it, where a line ends, what is spread when a
+/// line is justified and where the custos stands follow exsurge's `ChantLine`
+/// (`positionNotationElement`, `buildFromChantNotationIndex`, `justifyElements`).
 pub fn engrave(score: &Score, options: &Options) -> Engraving {
     let estimate = |text: &str| estimate_width(text);
     let measure: &dyn Fn(&str) -> f32 = options.measure.unwrap_or(&estimate);
     let size = options.lyric_size;
+    let hyphen_width = measure("-") * size;
+    // Between two words there is at least the width of a hyphen.
+    let word_space = hyphen_width;
 
     // Gregorio reads a score without a clef with a do clef on the third line.
     let mut clef = Clef { do_clef: true, line: 3, flat: false };
     let mut styles = Styles::default();
     let mut blocks = Vec::new();
-    for syllable in &score.syllables {
-        let spans = styles.read(&syllable.text);
+    for (k, syllable) in score.syllables.iter().enumerate() {
+        let (spans, forced) = styles.read(&syllable.text);
         let plain: String = spans.iter().map(|s| s.text.as_str()).collect();
         let empty = NoteGroup::default();
         let group = syllable.notes.as_ref().unwrap_or(&empty);
         let mut block = set_group(group);
-        block.starts_word = syllable.starts_word;
         block.text = measure(&plain) * size;
-        // The first vowel stands under the middle of the first note.
-        let lead = measure(&plain[..vowel_at(&plain)]) * size;
-        let vowel = plain[vowel_at(&plain)..].chars().next().map_or(0.0, |c| measure(&c.to_string()) * size);
-        block.text_lead = if block.notes > 0.0 { (lead + vowel / 2.0 - STEP / 2.0).max(0.0) } else { 0.0 };
+        // The text stands with the middle of its vowel under the middle of the first note:
+        // the part in `{...}` if there is one, else what the language says, else its middle.
+        let (start, len) = forced.or_else(|| vowel_segment(&plain)).unwrap_or((0, plain.len()));
+        let (before, upto) = (measure(&plain[..start]) * size, measure(&plain[..start + len]) * size);
+        block.centre = before + (upto - before) / 2.0;
+        block.allows_hyphen = !plain.is_empty() && score.syllables.get(k + 1).is_some_and(|next| !next.starts_word && !next.text.is_empty());
         block.spans = spans;
         if let Some(new) = block.clef {
             clef = new;
@@ -224,95 +282,203 @@ pub fn engrave(score: &Score, options: &Options) -> Engraving {
         blocks.push(block);
     }
 
-    let clef_width = Glyph::DoClef.metrics().width + 3.0 * NEUME_SPACE;
-    let custos_room = Glyph::CustosLong.metrics().width + 2.0 * NEUME_SPACE;
-    let word_gap = measure(" ").max(0.2) * size;
-    let syllable_gap = 3.0 * NEUME_SPACE;
+    let clef_right = Glyph::DoClef.metrics().width + 4.0 * NEUME_SPACE;
+    let custos_width = Glyph::CustosLong.metrics().width;
+    // What is left of a line when room is kept for a custos.
+    let notes_limit = options.width - custos_width - 4.0 * NEUME_SPACE;
 
     let mut engraving = Engraving { lines: Vec::new(), width: options.width, lyric_size: size };
-    let mut line = Line::default();
-    let mut notes_end = clef_width;
-    let mut text_end = clef_width;
+    let mut on_line: Vec<usize> = Vec::new();
     let mut line_clef = blocks.first().and_then(|b| b.clef).unwrap_or(clef);
-    let mut on_line: Vec<(usize, f32)> = Vec::new();
-
-    let finish = |line: &mut Line, on_line: &mut Vec<(usize, f32)>, blocks: &[Block], clef: Clef, custos: Option<u8>, justify: bool, engraving: &mut Engraving| {
-        // Spread the room that is left over the gaps between the syllables.
-        let used = on_line.last().map_or(0.0, |(k, x)| x + blocks[*k].notes.max(blocks[*k].text - blocks[*k].text_lead));
-        let room = options.width - used - if custos.is_some() { custos_room } else { 0.0 };
-        let gaps = on_line.len().saturating_sub(1).max(1) as f32;
-        let extra = if justify && room > 0.0 && room < options.width * 0.4 { room / gaps } else { 0.0 };
-        line.highest = TOP_LINE;
-        line.lowest = BOTTOM_LINE;
-        place_clef(line, clef);
-        for (n, (k, x)) in on_line.iter().enumerate() {
-            let block = &blocks[*k];
-            let x = x + extra * n as f32;
-            for glyph in &block.glyphs {
-                line.glyphs.push(PlacedGlyph { x: glyph.x + x, ..*glyph });
-                line.highest = line.highest.max(glyph.pitch + 1.0);
-                line.lowest = line.lowest.min(glyph.pitch - 1.0);
-            }
-            for rule in &block.rules {
-                line.rules.push(Rule { x: rule.x + x, ..*rule });
-                line.highest = line.highest.max(rule.top);
-                line.lowest = line.lowest.min(rule.top - rule.height);
-            }
-            if !block.spans.is_empty() {
-                line.lyrics.push(Lyric { x: x - block.text_lead, row: 0, spans: block.spans.clone() });
-            }
-        }
-        if let Some(pitch) = custos {
-            // The stem points away from the middle of the staff.
-            let glyph = if f32::from(pitch) < 6.0 { Glyph::CustosLong } else { Glyph::CustosDescLong };
-            line.glyphs.push(PlacedGlyph { glyph, x: options.width - glyph.metrics().width, pitch: f32::from(pitch) });
-            line.highest = line.highest.max(f32::from(pitch) + 2.5);
-            line.lowest = line.lowest.min(f32::from(pitch) - 2.5);
-        }
-        engraving.lines.push(std::mem::take(line));
-        on_line.clear();
-    };
-
-    for (k, block) in blocks.iter().enumerate() {
-        if block.only_clef {
+    let mut k = 0usize;
+    let last = blocks.len().saturating_sub(1);
+    while k < blocks.len() {
+        if blocks[k].only_clef && on_line.is_empty() {
             // At the start of a line the clef is drawn by the line itself.
-            if on_line.is_empty() {
-                line_clef = block.clef.unwrap_or(line_clef);
-                continue;
+            line_clef = blocks[k].clef.unwrap_or(line_clef);
+            k += 1;
+            continue;
+        }
+        // Right after what stands before it, whatever the text says.
+        let (prev_right, prev_trailing) = match on_line.last() {
+            Some(&p) => (blocks[p].notes_right(), blocks[p].trailing),
+            None => (clef_right, 0.0),
+        };
+        let mut x = prev_right + prev_trailing;
+        let with_text = on_line.iter().rev().copied().find(|&p| blocks[p].has_text());
+        blocks[k].x = x;
+        blocks[k].hyphen = false;
+        match with_text {
+            None => {
+                // The first text on the line may not hang out on the left.
+                let left = blocks[k].text_left();
+                if blocks[k].has_text() && left < 0.0 {
+                    x -= left;
+                }
+            }
+            Some(p) if !blocks[k].has_text() => {
+                // Notes without text: the syllable before them keeps its hyphen.
+                if blocks[p].allows_hyphen {
+                    blocks[p].hyphen = true;
+                }
+            }
+            Some(p) => {
+                let left = blocks[k].text_left();
+                if !blocks[p].allows_hyphen {
+                    // A new word: a space between the two.
+                    let right = blocks[p].text_right(hyphen_width) + word_space;
+                    if right > left {
+                        x += right - left;
+                    }
+                } else {
+                    blocks[p].hyphen = false;
+                    let right = blocks[p].text_right(hyphen_width);
+                    if right > left {
+                        // The two syllables meet: set them right against each other.
+                        x += right - left;
+                    } else {
+                        // There is room between them, which a hyphen fills.
+                        blocks[p].hyphen = true;
+                        let right = blocks[p].text_right(hyphen_width);
+                        if right > left {
+                            x += right - left;
+                        }
+                    }
+                }
             }
         }
-        let gap = if on_line.is_empty() {
-            0.0
-        } else if block.starts_word {
-            word_gap
-        } else {
-            0.0
-        };
-        let mut x = (notes_end).max(text_end + gap + block.text_lead);
-        let right = x + block.notes.max(block.text - block.text_lead);
-        if right > options.width - custos_room && !on_line.is_empty() {
+        blocks[k].x = x;
+        // The last syllable of the score needs no room for a custos.
+        let limit = if k == last { options.width } else { notes_limit };
+        let fits = blocks[k].notes_right() + if k == last { 0.0 } else { blocks[k].trailing } < limit
+            && (!blocks[k].has_text() || blocks[k].text_right(hyphen_width) <= options.width);
+        if !fits && !on_line.is_empty() {
+            // A bar is not left alone at the start of a line: what stands before it goes along.
+            if blocks[k].is_bar && on_line.len() > 1 {
+                k = on_line.pop().unwrap_or(k);
+            }
+            // The word goes on in the next line.
+            if let Some(p) = on_line.iter().rev().copied().find(|&p| blocks[p].has_text()) {
+                if blocks[p].allows_hyphen {
+                    blocks[p].hyphen = true;
+                }
+            }
             let custos = blocks[k..].iter().find_map(|b| b.first_pitch);
-            finish(&mut line, &mut on_line, &blocks, line_clef, custos, true, &mut engraving);
-            line_clef = block.clef.unwrap_or(line_clef);
-            notes_end = clef_width;
-            text_end = clef_width;
-            x = notes_end.max(text_end + block.text_lead);
+            engraving.lines.push(finish_line(&mut blocks, &on_line, line_clef, custos, true, options, hyphen_width));
+            on_line.clear();
+            line_clef = blocks[k].clef.unwrap_or(line_clef);
+            continue;
         }
-        on_line.push((k, x));
-        notes_end = x + block.notes + if block.notes > 0.0 { syllable_gap } else { 0.0 };
-        text_end = x - block.text_lead + block.text;
-        if block.breaks {
+        on_line.push(k);
+        if blocks[k].breaks {
             let custos = blocks[k + 1..].iter().find_map(|b| b.first_pitch);
-            finish(&mut line, &mut on_line, &blocks, line_clef, custos, false, &mut engraving);
+            engraving.lines.push(finish_line(&mut blocks, &on_line, line_clef, custos, false, options, hyphen_width));
+            on_line.clear();
             line_clef = blocks.get(k + 1).and_then(|b| b.clef).unwrap_or(line_clef);
-            notes_end = clef_width;
-            text_end = clef_width;
         }
+        k += 1;
     }
     if !on_line.is_empty() {
-        finish(&mut line, &mut on_line, &blocks, line_clef, None, false, &mut engraving);
+        // The last line is only spread if it ends with a bar and is nearly full.
+        let end = on_line.last().map_or(0.0, |&p| blocks[p].notes_right());
+        let justify = on_line.last().is_some_and(|&p| blocks[p].is_bar) && (options.width - end) / options.width < 0.1;
+        engraving.lines.push(finish_line(&mut blocks, &on_line, line_clef, None, justify, options, hyphen_width));
     }
     engraving
+}
+
+/// Spreads a line to its width if asked to, and draws it.
+fn finish_line(
+    blocks: &mut [Block],
+    on_line: &[usize],
+    clef: Clef,
+    custos: Option<u8>,
+    justify: bool,
+    options: &Options,
+    hyphen_width: f32,
+) -> Line {
+    let custos_glyph = custos.map(custos_glyph);
+    if justify {
+        // The room that is left, after the text and the notes and before the custos.
+        let mut room = 0.0;
+        if let Some(&p) = on_line.last() {
+            let text = on_line.iter().rev().find(|&&q| blocks[q].has_text()).map_or(f32::MIN, |&q| blocks[q].text_right(hyphen_width));
+            room = options.width - text.max(blocks[p].notes_right() + blocks[p].trailing);
+        }
+        if let Some(glyph) = custos_glyph {
+            room -= glyph.metrics().width;
+        }
+        if room > 0.0 {
+            // Room goes before every syllable, except between two that were set right
+            // against each other.
+            let mut movable = Vec::new();
+            let mut with_text: Option<usize> = None;
+            for (n, &k) in on_line.iter().enumerate() {
+                let joined = with_text.is_some_and(|p| blocks[p].allows_hyphen && !blocks[p].hyphen);
+                if !joined {
+                    movable.push(n);
+                }
+                if blocks[k].has_text() {
+                    with_text = Some(k);
+                }
+            }
+            if !movable.is_empty() {
+                let step = room / movable.len() as f32;
+                let mut offset = 0.0;
+                for (n, &k) in on_line.iter().enumerate() {
+                    if movable.contains(&n) {
+                        offset += step;
+                    }
+                    blocks[k].x += offset;
+                }
+            }
+        }
+    }
+
+    let mut line = Line::default();
+    place_clef(&mut line, clef);
+    for &k in on_line {
+        let block = &blocks[k];
+        for glyph in &block.glyphs {
+            line.glyphs.push(PlacedGlyph { x: glyph.x + block.x, ..*glyph });
+            let metrics = glyph.glyph.metrics();
+            line.highest = line.highest.max(glyph.pitch + metrics.above / STEP);
+            line.lowest = line.lowest.min(glyph.pitch - metrics.below / STEP);
+        }
+        for rule in &block.rules {
+            line.rules.push(Rule { x: rule.x + block.x, ..*rule });
+            line.highest = line.highest.max(rule.top);
+            line.lowest = line.lowest.min(rule.top - rule.height);
+        }
+        if block.has_text() {
+            let mut spans = block.spans.clone();
+            if block.hyphen {
+                if let Some(last) = spans.last_mut() {
+                    last.text.push('-');
+                }
+            }
+            line.lyrics.push(Lyric { x: block.text_left(), row: 0, spans });
+        }
+    }
+    if let (Some(pitch), Some(glyph)) = (custos, custos_glyph) {
+        // At the very end of the line.
+        let pitch = f32::from(pitch);
+        line.glyphs.push(PlacedGlyph { glyph, x: options.width - glyph.metrics().width, pitch });
+        line.highest = line.highest.max(pitch + glyph.metrics().above / STEP);
+        line.lowest = line.lowest.min(pitch - glyph.metrics().below / STEP);
+    }
+    line
+}
+
+/// The custos for a pitch, as exsurge chooses it: its stem up from the upper part of the
+/// staff on, and the long form on a line.
+fn custos_glyph(pitch: u8) -> Glyph {
+    match (pitch <= 8, pitch % 2 == 1) {
+        (true, true) => Glyph::CustosLong,
+        (true, false) => Glyph::CustosShort,
+        (false, true) => Glyph::CustosDescLong,
+        (false, false) => Glyph::CustosDescShort,
+    }
 }
 
 fn place_clef(line: &mut Line, clef: Clef) {
@@ -321,35 +487,44 @@ fn place_clef(line: &mut Line, clef: Clef) {
     let glyph = if clef.do_clef { Glyph::DoClef } else { Glyph::FaClef };
     let mut x = 0.0;
     if clef.flat {
-        // The flat of a flat clef stands in the space below the clef's line.
+        // The flat of a flat clef stands in the space below the clef's line, as in exsurge.
         line.glyphs.push(PlacedGlyph { glyph: Glyph::Flat, x, pitch: pitch - 1.0 });
         x += Glyph::Flat.metrics().width + NEUME_SPACE / 2.0;
     }
     line.glyphs.push(PlacedGlyph { glyph, x, pitch });
-    line.highest = line.highest.max(pitch + 2.0);
+    line.highest = line.highest.max(pitch + glyph.metrics().above / STEP);
 }
 
-/// Sets what stands between one pair of parentheses.
+/// Sets what stands between one pair of parentheses. The places of the dot, the vertical and
+/// the horizontal episema follow exsurge's `Markings`; the bars its `Signs`.
 fn set_group(group: &NoteGroup) -> Block {
     let mut block = Block {
         glyphs: Vec::new(),
         rules: Vec::new(),
         spans: Vec::new(),
         notes: 0.0,
+        origin: 0.0,
+        // The room after a neume or a bar, where nothing else is written.
+        trailing: 4.0 * NEUME_SPACE,
         text: 0.0,
-        text_lead: 0.0,
-        starts_word: false,
+        centre: 0.0,
+        allows_hyphen: false,
+        hyphen: false,
+        is_bar: !group.elements.is_empty(),
         first_pitch: None,
         clef: None,
         only_clef: !group.elements.is_empty(),
         breaks: false,
+        x: 0.0,
     };
     let mut x = 0.0f32;
     // The notes that stand together, waiting to become neumes.
     let mut run: Vec<Head> = Vec::new();
     let mut pending_space = 0.0f32;
+    // The point the text is centred under: set by the first thing that is drawn.
+    let mut origin: Option<f32> = None;
 
-    fn flush(run: &mut Vec<Head>, group: &NoteGroup, block: &mut Block, x: &mut f32) {
+    fn flush(run: &mut Vec<Head>, group: &NoteGroup, block: &mut Block, x: &mut f32, origin: &mut Option<f32>) {
         if run.is_empty() {
             return;
         }
@@ -359,6 +534,9 @@ fn set_group(group: &NoteGroup) -> Block {
                 *x += NEUME_SPACE;
             }
             let set = neume::set(neume, run);
+            if let Some(first) = set.glyphs.first() {
+                origin.get_or_insert(*x + first.x + first.glyph.metrics().origin);
+            }
             for glyph in &set.glyphs {
                 block.glyphs.push(PlacedGlyph { glyph: glyph.glyph, x: glyph.x + *x, pitch: glyph.pitch });
             }
@@ -370,7 +548,9 @@ fn set_group(group: &NoteGroup) -> Block {
                     height: stroke.top - stroke.bottom,
                 });
             }
-            // The signs of each note, by the glyph that stands for it.
+            // The glyph that stands for a head, with its left edge in the block.
+            let glyph_of = |index: usize| set.glyphs.iter().rev().find(|g| g.head == index).or(set.glyphs.last());
+            let mut dots_right = 0.0f32;
             for (k, head) in run[neume.heads.clone()].iter().enumerate() {
                 let index = neume.heads.start + k;
                 // A doubled shape carries its signs on its last head.
@@ -378,34 +558,61 @@ fn set_group(group: &NoteGroup) -> Block {
                     continue;
                 }
                 let ElementKind::Note(note) = &group.elements[head.note].kind else { continue };
-                let Some(placed) = set.glyphs.iter().rev().find(|g| g.head == index).or(set.glyphs.last()) else { continue };
+                let Some(placed) = glyph_of(index) else { continue };
                 let metrics = placed.glyph.metrics();
                 let (left, right) = (placed.x + *x, placed.x + *x + metrics.width);
                 let pitch = f32::from(head.pitch);
-                if note.mora > 0 {
-                    // A dot beside a note on a line stands in the space above it.
-                    let at = if head.pitch % 2 == 1 { pitch + 0.9 } else { pitch };
-                    for dot in 0..note.mora {
-                        block.glyphs.push(PlacedGlyph {
-                            glyph: Glyph::Mora,
-                            x: right + 0.02 + f32::from(dot) * 0.09,
-                            pitch: at,
-                        });
-                    }
-                    *x += 0.09 * f32::from(note.mora);
+                let on_line = head.pitch % 2 == 1;
+
+                // Dots: a quarter of a step after the note; beside a note on a line the dot
+                // moves up into the space. A second one goes to the other side.
+                for dot in 0..note.mora {
+                    let at = match (dot, on_line) {
+                        (0, true) => pitch + 0.75,
+                        (0, false) => pitch,
+                        (_, true) => pitch - 0.75,
+                        (_, false) => pitch + 1.75,
+                    };
+                    let dot_x = right + STEP / 4.0;
+                    block.glyphs.push(PlacedGlyph { glyph: Glyph::Mora, x: dot_x, pitch: at });
+                    dots_right = dots_right.max(dot_x + Glyph::Mora.metrics().width - *x - set.width);
                 }
+                // The vertical episema: under the middle of the note, or over it for `'1`.
                 if note.ictus {
+                    let above = note.raw_modifiers.contains("'1");
+                    let glyph = if above { Glyph::VerticalEpisemaAbove } else { Glyph::VerticalEpisemaBelow };
+                    let away = match (above, on_line) {
+                        (true, false) => 1.5,
+                        (true, true) => 0.9,
+                        (false, false) => -1.5,
+                        (false, true) => -0.8,
+                    };
                     block.glyphs.push(PlacedGlyph {
-                        glyph: Glyph::VerticalEpisemaBelow,
-                        x: (left + right) / 2.0 - Glyph::VerticalEpisemaBelow.metrics().width / 2.0,
-                        pitch: pitch - 1.1,
+                        glyph,
+                        x: left + metrics.width / 2.0 - glyph.metrics().origin,
+                        pitch: pitch + away,
                     });
                 }
-                if note.episema > 0 {
-                    block.rules.push(Rule { x: left, top: pitch + 1.6, width: right - left, height: LINE_WEIGHT * 1.5 / STEP });
+                // The horizontal episema: `_` written n times lies over this note and the
+                // n - 1 before it, as a stroke per note in the nearest space that is clear.
+                for back in 0..usize::from(note.episema) {
+                    let Some(over) = index.checked_sub(back).filter(|i| *i >= neume.heads.start).and_then(|i| glyph_of(i)) else { break };
+                    let over_metrics = over.glyph.metrics();
+                    let below = note.raw_modifiers.contains("_0");
+                    let top = if below {
+                        let lowest = (over.pitch - over_metrics.below / STEP - 0.4).ceil();
+                        if lowest.rem_euclid(2.0) == 1.0 { lowest - 1.0 } else { lowest }
+                    } else {
+                        let highest = (over.pitch + over_metrics.above / STEP + 0.4).floor();
+                        if highest.rem_euclid(2.0) == 1.0 { highest + 1.0 } else { highest }
+                    };
+                    // Over a porrectus stroke it is as wide as one note.
+                    let porrectus = matches!(over.glyph, Glyph::Porrectus1 | Glyph::Porrectus2 | Glyph::Porrectus3 | Glyph::Porrectus4);
+                    let width = if porrectus { STEP } else { over_metrics.width };
+                    block.rules.push(Rule { x: over.x + *x, top, width, height: LINE_WEIGHT / STEP });
                 }
             }
-            *x += set.width;
+            *x += set.width + dots_right.max(0.0);
         }
         run.clear();
     }
@@ -413,6 +620,9 @@ fn set_group(group: &NoteGroup) -> Block {
     for (index, element) in group.elements.iter().enumerate() {
         if !matches!(element.kind, ElementKind::Clef(_) | ElementKind::SecondaryClef(_)) {
             block.only_clef = false;
+        }
+        if !matches!(element.kind, ElementKind::Bar(_)) {
+            block.is_bar = false;
         }
         match &element.kind {
             ElementKind::Note(note) => {
@@ -426,41 +636,46 @@ fn set_group(group: &NoteGroup) -> Block {
             ElementKind::Join | ElementKind::At | ElementKind::Attribute { .. } => {
                 // `!` ends the neume and sets the next one right against it.
                 if element.kind == ElementKind::Join {
-                    flush(&mut run, group, &mut block, &mut x);
+                    flush(&mut run, group, &mut block, &mut x, &mut origin);
                 }
             }
             ElementKind::Space(space) => {
-                flush(&mut run, group, &mut block, &mut x);
+                flush(&mut run, group, &mut block, &mut x, &mut origin);
+                // `/` is the room between two neumes, `//` and a blank twice that.
                 pending_space = match space {
                     Space::Small | Space::SmallJoined | Space::SmallNoBreak | Space::Half => NEUME_SPACE,
                     Space::Medium | Space::Large | Space::Sized => 2.0 * NEUME_SPACE,
                 };
             }
             ElementKind::Accidental { pitch, kind, .. } => {
-                flush(&mut run, group, &mut block, &mut x);
+                flush(&mut run, group, &mut block, &mut x, &mut origin);
                 x += pending_space;
-                pending_space = NEUME_SPACE;
                 // The font has no sharp: a natural stands in for it for now.
                 let glyph = if *kind == AccidentalKind::Flat { Glyph::Flat } else { Glyph::Natural };
+                origin.get_or_insert(x + glyph.metrics().origin);
                 block.glyphs.push(PlacedGlyph { glyph, x, pitch: f32::from(*pitch) });
                 x += glyph.metrics().width;
+                pending_space = 2.0 * NEUME_SPACE;
             }
             ElementKind::Bar(bar) => {
-                flush(&mut run, group, &mut block, &mut x);
+                flush(&mut run, group, &mut block, &mut x, &mut origin);
                 x += pending_space;
                 if !block.glyphs.is_empty() || !block.rules.is_empty() {
                     x += 2.0 * NEUME_SPACE;
                 }
-                let weight = LINE_WEIGHT * 1.3;
+                let start = x;
                 let mut rule = |x: f32, top: f32, bottom: f32| {
-                    block.rules.push(Rule { x, top, width: weight, height: top - bottom });
+                    block.rules.push(Rule { x, top, width: LINE_WEIGHT, height: top - bottom });
                 };
                 match bar {
                     Bar::Virgula { high } => {
                         let pitch = if *high { TOP_LINE + 2.0 } else { TOP_LINE };
                         block.glyphs.push(PlacedGlyph { glyph: Glyph::Virgula, x, pitch });
-                        x += Glyph::Virgula.metrics().width;
+                        x += Glyph::Virgula.metrics().width - LINE_WEIGHT;
                     }
+                    // exsurge has the quarter, half, full and double bar. The stroke shorter
+                    // than a quarter bar, the forms above the staff and the dotted bar are
+                    // drawn here by their likeness to those; the Dominican bars as half bars.
                     Bar::Minimis { high } => {
                         let top = TOP_LINE + if *high { 2.5 } else { 0.5 };
                         rule(x, top, top - 1.0);
@@ -473,29 +688,31 @@ fn set_group(group: &NoteGroup) -> Block {
                     Bar::Maior | Bar::MaiorDotted => rule(x, TOP_LINE, BOTTOM_LINE),
                     Bar::Finalis => {
                         rule(x, TOP_LINE, BOTTOM_LINE);
-                        x += 0.07;
+                        x += 2.0 * NEUME_SPACE;
                         rule(x, TOP_LINE, BOTTOM_LINE);
                     }
                 }
-                x += weight;
+                x += LINE_WEIGHT;
+                // Text under a bar is centred under it.
+                origin.get_or_insert((start + x) / 2.0);
                 pending_space = 2.0 * NEUME_SPACE;
             }
             ElementKind::Custos(pitch) => {
-                flush(&mut run, group, &mut block, &mut x);
+                flush(&mut run, group, &mut block, &mut x, &mut origin);
                 if let Some(pitch) = pitch {
                     x += pending_space + NEUME_SPACE;
                     pending_space = 0.0;
-                    let glyph = if *pitch < 6 { Glyph::CustosLong } else { Glyph::CustosDescLong };
+                    let glyph = custos_glyph(*pitch);
                     block.glyphs.push(PlacedGlyph { glyph, x, pitch: f32::from(*pitch) });
                     x += glyph.metrics().width;
                 }
             }
             ElementKind::Clef(clef) => {
-                flush(&mut run, group, &mut block, &mut x);
+                flush(&mut run, group, &mut block, &mut x, &mut origin);
                 block.clef = Some(*clef);
             }
             ElementKind::LineBreak { .. } => {
-                flush(&mut run, group, &mut block, &mut x);
+                flush(&mut run, group, &mut block, &mut x, &mut origin);
                 block.breaks = true;
             }
             ElementKind::SecondaryClef(_)
@@ -504,8 +721,9 @@ fn set_group(group: &NoteGroup) -> Block {
             | ElementKind::NoBreak { .. } => {}
         }
     }
-    flush(&mut run, group, &mut block, &mut x);
+    flush(&mut run, group, &mut block, &mut x, &mut origin);
     block.notes = x;
+    block.origin = origin.unwrap_or(0.0);
     block
 }
 
@@ -519,12 +737,19 @@ struct Styles {
 }
 
 impl Styles {
-    /// Reads a syllable's text as written into spans of plain text.
-    fn read(&mut self, raw: &str) -> Vec<Span> {
+    /// Reads a syllable's text as written into spans of plain text. With them comes the part
+    /// that was written in `{...}`, as where it starts in the plain text and how long it is:
+    /// the text is to be centred on it.
+    fn read(&mut self, raw: &str) -> (Vec<Span>, Option<(usize, usize)>) {
         let mut spans: Vec<Span> = Vec::new();
         let mut text = String::new();
+        // How much plain text there is so far, and the part in braces.
+        let mut plain_len = 0usize;
+        let mut brace: Option<usize> = None;
+        let mut forced: Option<(usize, usize)> = None;
         let mut i = 0;
-        let flush = |text: &mut String, spans: &mut Vec<Span>, s: &Styles| {
+        let flush = |text: &mut String, spans: &mut Vec<Span>, s: &Styles, plain_len: &mut usize| {
+            *plain_len += text.len();
             if !text.is_empty() {
                 spans.push(Span {
                     text: std::mem::take(text),
@@ -567,7 +792,7 @@ impl Styles {
                     }
                     let known = matches!(name, "i" | "b" | "sc" | "c" | "ul" | "tt" | "e" | "eu" | "nlba" | "pr" | "clear");
                     if known {
-                        flush(&mut text, &mut spans, self);
+                        flush(&mut text, &mut spans, self, &mut plain_len);
                         match name {
                             "i" | "e" => self.italic = !closing,
                             "b" => self.bold = !closing,
@@ -580,39 +805,68 @@ impl Styles {
                     }
                 }
             }
-            // The braces that mark the vowel to centre on are not printed.
-            if c != '{' && c != '}' {
-                text.push(c);
+            // The braces that mark what to centre on are not printed. Only the first pair counts.
+            match c {
+                '{' if forced.is_none() && brace.is_none() => brace = Some(plain_len + text.len()),
+                '}' => {
+                    if let Some(start) = brace.take() {
+                        forced = Some((start, plain_len + text.len() - start));
+                    }
+                }
+                '{' => {}
+                _ => text.push(c),
             }
             i += c.len_utf8();
         }
-        flush(&mut text, &mut spans, self);
-        spans
+        flush(&mut text, &mut spans, self, &mut plain_len);
+        (spans, forced)
     }
 }
 
-/// The character that a `<sp>` code stands for.
+/// The character that a `<sp>` code stands for. These are the codes the format's description
+/// names; any other code is printed as it is written, since nothing says what it stands for.
+/// (The description also has `A/`, a barred A that is not in Unicode; it is left as written.)
 fn special(code: &str) -> &str {
     match code {
         "V/" => "\u{2123}",
         "R/" => "\u{211F}",
-        "A/" => "\u{2C6F}",
         "ae" => "æ",
         "'ae" | "'æ" => "ǽ",
         "oe" => "œ",
         "'oe" | "'œ" => "œ\u{301}",
-        "AE" => "Æ",
-        "OE" => "Œ",
-        "+" => "\u{2020}",
-        "*" => "*",
         other => other,
     }
 }
 
-/// Where the first vowel of a piece of text starts, or 0 if it has none.
-fn vowel_at(text: &str) -> usize {
-    const VOWELS: &str = "aeiouyáéíóúýàèìòùäëïöüæœǽAEIOUYÁÉÍÓÚÝÄËÏÖÜÆŒ";
-    text.char_indices().find(|(_, c)| VOWELS.contains(*c)).map_or(0, |(i, _)| i)
+/// The letters of a syllable that stand under the middle of its first note, as where they
+/// start in the text and how many bytes they are.
+///
+/// This is what Gregorio centres, observed with probes (`docs/gabc-observed.md`): the first
+/// vowel, where an `i` or `u` before another vowel counts as a consonant (qui, cui, iam,
+/// sanguis), together with the letter after it if the two are a diphthong (ae, au, oe, eu,
+/// ei, ay). exsurge's rule differs for `ui`, which it takes as a diphthong. A text with no
+/// vowel is centred as a whole, without the punctuation at its end.
+fn vowel_segment(text: &str) -> Option<(usize, usize)> {
+    const VOWELS: &str = "aeiouyáéíóúýàèìòùäëïöüæœǽ";
+    // Lower case, letter for letter, with where each letter starts in the text.
+    let letters: Vec<(usize, char)> =
+        text.char_indices().map(|(at, c)| (at, c.to_lowercase().next().unwrap_or(c))).collect();
+    let end = |n: usize| letters.get(n).map_or(text.len(), |l| l.0);
+    let is_vowel = |n: usize| letters.get(n).is_some_and(|l| VOWELS.contains(l.1));
+    let Some(mut n) = (0..letters.len()).find(|&n| is_vowel(n)) else {
+        // No vowel: all of it, but not the punctuation that ends it.
+        let trimmed = text.trim_end_matches(['.', ',', ';', ':']).len();
+        return (!text.is_empty()).then_some((0, if trimmed > 0 { trimmed } else { text.len() }));
+    };
+    while matches!(letters[n].1, 'i' | 'u') && is_vowel(n + 1) {
+        n += 1;
+    }
+    let second = letters.get(n + 1).map(|l| l.1);
+    let diphthong = matches!(
+        (letters[n].1, second),
+        ('a', Some('e' | 'é' | 'u' | 'y')) | ('á', Some('u')) | ('o', Some('e' | 'é')) | ('e' | 'é', Some('u' | 'i'))
+    );
+    Some((letters[n].0, end(n + 1 + usize::from(diphthong)) - letters[n].0))
 }
 
 /// A rough width of text in em, for when no font is at hand.
@@ -656,8 +910,9 @@ mod tests {
         assert_eq!(line.glyphs[0].pitch, 9.0);
         assert!(line.glyphs[1].x > Glyph::DoClef.metrics().width);
         assert!(line.glyphs[2].x > line.glyphs[1].x);
+        // With a quarter of an em between the neumes the syllables stand apart, joined by hyphens.
         let texts: Vec<String> = line.lyrics.iter().map(|l| l.spans[0].text.clone()).collect();
-        assert_eq!(texts, ["KY", "ri", "e"]);
+        assert_eq!(texts, ["KY-", "ri-", "e"]);
         // The double bar is two full-height rules.
         let bars: Vec<&Rule> = line.rules.iter().filter(|r| r.height == 6.0).collect();
         assert_eq!(bars.len(), 2);
@@ -690,12 +945,81 @@ mod tests {
     #[test]
     fn text_is_read_with_its_styles_and_special_characters() {
         let mut styles = Styles::default();
-        let spans = styles.read("<i>Ps.</i> <sp>V/</sp>. a{e}$(x<v>\\tex</v>");
+        let (spans, forced) = styles.read("<i>Ps.</i> <sp>V/</sp>. a{e}$(x<v>\\tex</v>");
         let texts: Vec<(&str, bool)> = spans.iter().map(|s| (s.text.as_str(), s.italic)).collect();
         assert_eq!(texts, [("Ps.", true), (" \u{2123}. ae(x", false)]);
+        // The part in braces, in the plain text: the `e`.
+        let plain: String = spans.iter().map(|s| s.text.as_str()).collect();
+        let (start, len) = forced.unwrap();
+        assert_eq!(&plain[start..start + len], "e");
+        // A code that the format's description does not name is printed as written.
+        assert_eq!(styles.read("<sp>A/</sp>").0[0].text, "A/");
         // A style lasts into the next syllable.
         styles.read("<b>one");
-        assert!(styles.read("two")[0].bold);
+        assert!(styles.read("two").0[0].bold);
+    }
+
+    #[test]
+    fn the_vowel_of_a_syllable() {
+        fn vowel(text: &str) -> Option<&str> {
+            vowel_segment(text).map(|(start, len)| &text[start..start + len])
+        }
+        // Every pair is what Gregorio centres for that syllable.
+        for (syllable, centre) in [
+            ("Dó", "ó"), ("mi", "i"), ("nus", "u"), ("quo", "o"), ("qui", "i"), ("guis", "i"), ("ius", "u"),
+            ("iam", "a"), ("ia", "a"), ("cui", "i"), ("cuí", "í"), ("uí", "í"), ("huic", "i"), ("cae", "ae"),
+            ("lau", "au"), ("coe", "oe"), ("eu", "eu"), ("seu", "eu"), ("hei", "ei"), ("áu", "áu"), ("aé", "aé"),
+            ("oé", "oé"), ("quae", "ae"), ("guae", "ae"), ("cœ", "œ"), ("præ", "æ"), ("ǽ", "ǽ"), ("Æ", "Æ"),
+            ("y", "y"), ("Ie", "e"), ("ju", "u"), ("um", "u"), ("AL", "A"), ("Ísra", "Í"), ("qu", "u"),
+            ("str", "str"), ("*", "*"), ("Ps.", "Ps"), ("et.", "e"),
+        ] {
+            assert_eq!(vowel(syllable), Some(centre), "{syllable}");
+        }
+        assert_eq!(vowel(""), None);
+    }
+
+    #[test]
+    fn syllables_of_a_word_meet_or_get_a_hyphen() {
+        // Wide syllables under single notes meet, and are set right together.
+        let e = engraved("%%\n(c4) strens(f)strens(g)strens(h) (::)", 18.0);
+        let texts: Vec<&str> = e.lines[0].lyrics.iter().map(|l| l.spans[0].text.as_str()).collect();
+        assert_eq!(texts, ["strens", "strens", "strens"]);
+        let lyrics = &e.lines[0].lyrics;
+        let width = estimate_width("strens") * e.lyric_size;
+        assert!((lyrics[1].x - lyrics[0].x - width).abs() < 1e-4);
+        // Many notes on the first syllable: the next one is far away, and a hyphen says so.
+        let e = engraved("%%\n(c4) Dó(fgfgfgfgfg//fgfgfgfg)mi(g)nus(h) (::)", 18.0);
+        let texts: Vec<&str> = e.lines[0].lyrics.iter().map(|l| l.spans[0].text.as_str()).collect();
+        assert_eq!(texts, ["Dó-", "mi-", "nus"]);
+        // Between two words there is room.
+        let e = engraved("%%\n(c4) et(f) in(g) (::)", 18.0);
+        let (et, inn) = (&e.lines[0].lyrics[0], &e.lines[0].lyrics[1]);
+        assert!(inn.x > et.x + estimate_width("et") * e.lyric_size, "{et:?} {inn:?}");
+    }
+
+    #[test]
+    fn dots_strokes_and_the_custos_stand_where_exsurge_puts_them() {
+        // A dot beside a note on a line (h) moves up into the space; beside one in a space (g) it stays.
+        let e = engraved("%%\n(c4) A(h.) B(g.)", 18.0);
+        let dots: Vec<f32> = e.lines[0].glyphs.iter().filter(|g| g.glyph == Glyph::Mora).map(|g| g.pitch).collect();
+        assert_eq!(dots, [7.75, 6.0]);
+        // The vertical episema under a note in a space is a step and a half below it.
+        let e = engraved("%%\n(c4) A(g')", 18.0);
+        let ictus = e.lines[0].glyphs.iter().find(|g| g.glyph == Glyph::VerticalEpisemaBelow).unwrap();
+        assert_eq!(ictus.pitch, 4.5);
+        // The horizontal episema lies in the next space above the note that is clear of it.
+        let e = engraved("%%\n(c4) A(g_)", 18.0);
+        let stroke = e.lines[0].rules.iter().find(|r| r.width > 0.1 && r.height < 0.5).unwrap();
+        assert_eq!(stroke.top, 8.0);
+        assert!((stroke.width - STEP).abs() < 1e-6);
+        // Written twice, it lies over two notes.
+        let e = engraved("%%\n(c4) A(gh__)", 18.0);
+        assert_eq!(e.lines[0].rules.iter().filter(|r| r.width > 0.1 && r.height < 0.5).count(), 2);
+        // The custos: stem up and long on a line in the lower part, short in a space, down from the top.
+        assert_eq!(custos_glyph(5), Glyph::CustosLong);
+        assert_eq!(custos_glyph(6), Glyph::CustosShort);
+        assert_eq!(custos_glyph(9), Glyph::CustosDescLong);
+        assert_eq!(custos_glyph(10), Glyph::CustosDescShort);
     }
 
     #[test]

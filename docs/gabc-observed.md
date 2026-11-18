@@ -2,7 +2,7 @@
 
 gabc-rs is written without Gregorio's source. Where the public description of the format (https://gregorio-project.github.io/gabc/) leaves a question open, the answer comes from giving Gregorio a small piece of GABC and reading what it prints: its exit status, its messages, and its structural dump (`gregorio -F dump`). The `Probe` workflow does that; `gh workflow run probe.yml -f probes='(c4) A(f) B(g)'` asks one question per line.
 
-This file lists what was observed in November 2026 with the Gregorio that Ubuntu packages for GitHub's `ubuntu-latest` runner. Each row is a probe that was run. "Error" means Gregorio exits with a failure; the parser's code for the same thing is in the last column.
+This file lists what was observed in November 2026 with Gregorio 6.1.0, as Ubuntu packages it for GitHub's `ubuntu-latest` runner (the version is what `gregorio --version` prints in the workflow's log). Each row is a probe that was run. "Error" means Gregorio exits with a failure; the parser's code for the same thing is in the last column.
 
 The second source is the reference run (`Corpus` workflow): all 18,740 GregoBase scores through both parsers. After the rules below, the two verdicts agree on 99.89% of them.
 
@@ -48,6 +48,24 @@ The second source is the reference run (`Corpus` workflow): all 18,740 GregoBase
 | `A(f) B` | error: text after the last notes | E024 |
 | `<eu>A(f) B(g)</eu>` | error, for the same reason: the closing tag is text with no notes | E024 |
 | `A(f) B(g))C(h)` | the stray `)` is text | |
+
+## Which letters stand under the first note
+
+Gregorio's dump marks the letters of a syllable that it centres under the first note. Every row was probed; `layout::vowel_segment` gives the same.
+
+| Syllable | Centred | |
+|---|---|---|
+| `Dó` `mi` `nus` `um` `AL` `Ísra` | `ó` `i` `u` `u` `A` `Í` | the first vowel |
+| `quo` `qui` `guis` `cui` `cuí` `uí` `huic` | `o` `i` `i` `i` `í` `í` `i` | a `u` before another vowel is a consonant |
+| `ius` `iam` `ia` `Ie` | `u` `a` `a` `e` | so is an `i` before another vowel |
+| `cae` `quae` `guae` `aé` | `ae` `ae` `ae` `aé` | a diphthong is centred whole |
+| `lau` `áu` `coe` `oé` `eu` `seu` `hei` | `au` `áu` `oe` `oé` `eu` `eu` `ei` | |
+| `cœ` `præ` `ǽ` `Æ` `y` | `œ` `æ` `ǽ` `Æ` `y` | |
+| `qu` | `u` | with no vowel after it, the `u` is one |
+| `str` `*` | `str` `*` | no vowel: the whole text |
+| `Ps.` `1.` `et.` | `Ps` `1` `e` | punctuation at the end stays outside |
+
+exsurge, whose line layout gabc-rs otherwise follows, takes `ui` as a diphthong (`qui` centred on `ui`). Gregorio's reading is used.
 
 ## The first syllable
 
