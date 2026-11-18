@@ -12,7 +12,7 @@ Found on 2026-11-18 with printpdf 0.12.9, azul-layout / azul-core / azul-css 0.0
 | E4 | Page images get LCD colour fringes, no way to choose | [azul#484](https://github.com/fschutt/azul/pull/484) | released: azul 0.0.18 |
 | E5 | Background of an absolutely positioned `<span>` not painted | [azul#484](https://github.com/fschutt/azul/pull/484) | released: azul 0.0.18 |
 | E6 | Inline SVG: `fill="currentColor"` draws nothing | [azul#485](https://github.com/fschutt/azul/issues/485) | open, not fixed yet |
-| E7 | `text-align: justify` spreads a line that ends with a forced break | fix written, on azul's branch `fix/input-bugs-2026-09-19` | not released yet |
+| E7 | `text-align: justify` spreads a line that ends with a forced break | azul commit `40e15d7af` on [azul#476](https://github.com/fschutt/azul/pull/476) | released: azul 0.0.19, printpdf 0.12.12 |
 | | No public way to build a font from outlines | [allsorts-azul#3](https://github.com/fschutt/allsorts-azul/pull/3) | open for review |
 
 gabc-rs builds against the released crates, with no patches. With them, `spike/cases/svg-path-fill.html` and `spike/cases/text-ink-clip.html` render the same in the PDF and in the PNG. The sections below describe each finding and its cause.
@@ -114,4 +114,4 @@ In a justified paragraph, every line that ends with `<br>` was stretched to the 
 
 Cause: the line breaker resolves each line's own alignment correctly (`resolve_effective_alignment`, with the forced break taken into account), but the spacing for justification was decided from the paragraph's `text-align` and from "is this the paragraph's last line" alone (`position_one_line_between` in `layout/src/text3/cache/line_layout.rs`).
 
-Fix: a line is justified if its own resolved alignment says so. That also makes `text-align-last: justify` spread the last line, which it did not. Regression test `layout/tests/a_line_before_a_forced_break_is_not_justified.rs`.
+Fix: a line is justified if its own resolved alignment says so. That also makes `text-align-last: justify` spread the last line, which it did not. Regression test `layout/tests/a_line_before_a_forced_break_is_not_justified.rs`. Released in azul 0.0.19; printpdf 0.12.12 pins it and checks the PDF end to end (`tests/html_justify_forced_break.rs`: fails against 0.0.18, passes against 0.0.19).

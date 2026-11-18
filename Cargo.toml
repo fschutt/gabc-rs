@@ -8,8 +8,8 @@ description = "Gregorian chant (GABC) and hymn (ABC) notation to HTML, PDF and P
 [dependencies]
 # Only for the `measure` feature: text widths from azul's text engine, the one that sets the
 # text when the score becomes a PDF or a PNG.
-azul-layout = { version = "0.0.18", default-features = false, features = ["std", "text_layout", "font_loading"], optional = true }
-azul-css = { version = "0.0.18", default-features = false, optional = true }
+azul-layout = { version = "0.0.19", default-features = false, features = ["std", "text_layout", "font_loading"], optional = true }
+azul-css = { version = "0.0.19", default-features = false, optional = true }
 
 [features]
 # `measure::FontMeasure`: the real width of the lyrics in a given font, for `layout::Options::measure`.
