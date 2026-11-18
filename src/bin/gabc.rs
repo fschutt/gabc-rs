@@ -1,4 +1,5 @@
 //! `gabc check [--summary] <file or directory>...`
+//! `gabc html <file.gabc> [--width <em>] [--size <css size>] [--font <family>]`
 //!
 //! Checks `.gabc` and `.abc` files and the notation blocks of `.md` files. Prints one line
 //! per problem as `path:line:col: error[E011]: message` and exits with 1 if any file has an
@@ -13,9 +14,14 @@ use gabc_rs::{abc, gabc, markdown, Diagnostic, Severity};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
-    if args.next().as_deref() != Some("check") {
-        eprintln!("usage: gabc check [--summary] <file or directory>...");
-        return ExitCode::from(2);
+    match args.next().as_deref() {
+        Some("check") => {}
+        Some("html") => return html(&args.collect::<Vec<_>>()),
+        _ => {
+            eprintln!("usage: gabc check [--summary] <file or directory>...");
+            eprintln!("       gabc html <file.gabc> [--width <em>] [--size <css size>] [--font <family>]");
+            return ExitCode::from(2);
+        }
     }
     let mut summary = false;
     let mut files = Vec::new();
@@ -87,6 +93,41 @@ fn main() -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// `gabc html <file.gabc>`: the score as an HTML document on standard output.
+fn html(args: &[String]) -> ExitCode {
+    let mut file = None;
+    let (mut width, mut size, mut font) = (18.0f32, String::from("34px"), String::from("serif"));
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--width" => width = args.next().and_then(|v| v.parse().ok()).unwrap_or(width),
+            "--size" => size = args.next().cloned().unwrap_or(size),
+            "--font" => font = args.next().cloned().unwrap_or(font),
+            path => file = Some(path.to_string()),
+        }
+    }
+    let Some(file) = file else {
+        eprintln!("usage: gabc html <file.gabc> [--width <em>] [--size <css size>] [--font <family>]");
+        return ExitCode::from(2);
+    };
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        eprintln!("{file}: not readable as UTF-8");
+        return ExitCode::from(2);
+    };
+    let parsed = gabc::parse(&text);
+    for d in &parsed.diagnostics {
+        eprintln!("{file}:{}", d.render(&text));
+    }
+    if !parsed.is_valid() {
+        return ExitCode::from(1);
+    }
+    let options = gabc_rs::layout::Options { width, ..Default::default() };
+    let engraving = gabc_rs::layout::engrave(&parsed.score, &options);
+    let title = parsed.score.headers.iter().find(|h| h.name == "name").map_or("", |h| h.value.as_str());
+    print!("{}", gabc_rs::html::document(&engraving, title, &font, &size));
+    ExitCode::SUCCESS
 }
 
 fn collect(path: &Path, out: &mut Vec<PathBuf>) {

@@ -2,9 +2,11 @@
 
 Gregorian chant notation (GABC) and metered hymns (ABC) rendered through one HTML+CSS string into PDF, PNG and the browser.
 
-**Status: early.** The parsers and the checker work; nothing is drawn from a score yet.
+**Status: early.** The parsers and the checker work. A chant score is drawn: neumes, bars, clef, custos, lyrics, broken into lines. Still to come: real text metrics, hyphens, the drop cap, hymns (ABC), the WASM page.
 
 - `gabc check <files or directories>`: checks `.gabc` and `.abc` files and the notation blocks of Markdown files, and prints every problem as `path:line:col: error[E011]: message`.
+- `gabc html <file.gabc>`: the score as an HTML document, which printpdf turns into a PDF and azul into a PNG.
+- `gabc_rs::neume`, `gabc_rs::layout`, `gabc_rs::html`: notes into neumes with their glyphs (a port of exsurge), syllables into lines, lines into HTML and CSS.
 - `gabc_rs::gabc::parse`: a strict GABC parser. It reports every problem with its position and still returns what it could read.
 - `gabc_rs::abc::parse`: the same for hymns, in a subset of ABC 2.1 (one tune, one voice, lyrics). It also checks that bars add up to the metre and that every note has its syllable.
 - `assets/fonts/gabc-neumes.ttf`: a neume font of 36 glyphs on private-use code points U+E000 to U+E023, built by `cargo run -p xtask -- font`.
@@ -15,7 +17,7 @@ Gregorian chant notation (GABC) and metered hymns (ABC) rendered through one HTM
 
 `cargo run -p xtask -- corpus gregobase` downloads the [GregoBase](https://gregobase.selapa.net) database (about 18,700 scores, transcriptions under CC0) into `target/corpus`, checks every score and writes a report. With `--oracle gregorio` each score is also given to an installed Gregorio, and the report lists where its verdict and ours differ. The `Corpus` workflow does this on every change to the parser.
 
-Gregorio is only ever run, as a program. Questions about the format are settled from its public description and from what the program outputs, never from its source. `docs/gabc-observed.md` lists what was observed, and the `Probe` workflow asks it about a piece of GABC. On the GregoBase library the two parsers reach the same verdict for 99.89% of the scores.
+Gregorio is only ever run, as a program. Questions about the format are settled from its public description and from what the program outputs, never from its source. `docs/gabc-observed.md` lists what was observed, and the `Probe` workflow asks it about a piece of GABC. On the GregoBase library the two parsers reach the same verdict for 99.89% of the scores. Of the scores both accept, all but two hold the same clefs, notes, bars, custodes and line breaks in the same order.
 
 ## How it is meant to work
 
