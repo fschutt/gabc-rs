@@ -15,13 +15,20 @@ pub const NEUME_FAMILY: &str = "Gabc Neumes";
 /// The family name of the music font for hymns (`assets/fonts/gabc-music.ttf`).
 pub const MUSIC_FAMILY: &str = "Gabc Music";
 
-/// The style rules that [`score`] relies on. `size` is the font size of the score with its
-/// unit (one em is four staff spaces): `"34px"`.
+/// The style rules that [`score`] relies on, in black. `size` is the font size of the score
+/// with its unit (one em is four staff spaces): `"34px"`.
 pub fn style(size: &str, lyric_size: f32) -> String {
+    style_in(size, lyric_size, "#000000")
+}
+
+/// [`style`] with the colour of the ink given, for a page that has its own: `"currentColor"`
+/// follows the text around the score, in a dark theme too. `size` may be any CSS length, such
+/// as `"min(40px, calc(100cqw / 18.6))"` for a score that is as wide as its container.
+pub fn style_in(size: &str, lyric_size: f32, ink: &str) -> String {
     format!(
-        ".gabc-score {{ font-size: {size}; color: #000000; }}\n\
+        ".gabc-score {{ font-size: {size}; color: {ink}; }}\n\
          .gabc-line {{ position: relative; width: 100%; break-inside: avoid; page-break-inside: avoid; }}\n\
-         .gabc-rule {{ position: absolute; background: #000000; }}\n\
+         .gabc-rule {{ position: absolute; background: {ink}; }}\n\
          .gabc-g {{ position: absolute; font-family: \"{NEUME_FAMILY}\"; font-size: 1em; line-height: 1; }}\n\
          .gabc-m {{ position: absolute; font-family: \"{MUSIC_FAMILY}\"; font-size: 1em; line-height: 1; }}\n\
          .gabc-ly {{ position: absolute; font-size: {lyric_size}em; line-height: 1; white-space: nowrap; }}\n\
