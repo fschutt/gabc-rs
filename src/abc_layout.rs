@@ -9,11 +9,13 @@
 //! Heights are staff steps above middle C: the lines of the staff are 2, 4, 6, 8 and 10
 //! (E G B d f). Lengths are in em, one em being four staff spaces, as in [`crate::layout`].
 //!
-//! Not drawn yet: ties and slurs, beams (short notes get flags), the bracket of a triplet,
-//! the numbers of first and second endings.
+//! Short notes written without a space between them share a beam, which is drawn level.
+//! Ties and slurs are bows from note to note; one that would cross a line end is left out.
+//!
+//! Not drawn yet: the bracket of a triplet, the numbers of first and second endings.
 
 use crate::abc::{Bar, Decoration, ElementKind, Fraction, Key, Metre, Note, SlotKind, Tune};
-use crate::layout::{Engraving, Line, Lyric, Options, PlacedMusic, Rule, Span};
+use crate::layout::{Curve, Engraving, Line, Lyric, Options, PlacedMusic, Rule, Span};
 use crate::music_glyphs::MusicGlyph;
 use crate::neume::{LINE_WEIGHT, STEP};
 
@@ -41,6 +43,25 @@ struct Atom {
     labels: Vec<(usize, String)>,
     /// A bar line: a line may end after it.
     ends_bar: bool,
+    /// A note: where its head is and what hangs on it.
+    note: Option<NoteParts>,
+}
+
+/// What of a note is decided only when its neighbours are known.
+struct NoteParts {
+    pitch: f32,
+    /// The left and right edge of the head, from the atom's left edge.
+    head: (f32, f32),
+    /// Its own stem and flag, drawn unless the note is under a beam.
+    stem: Vec<Rule>,
+    flag: Vec<PlacedMusic>,
+    /// How many flags it has: 1 for an eighth, 2 for a sixteenth.
+    flags: u8,
+    /// The beam group it belongs to.
+    beam: Option<usize>,
+    tie: bool,
+    slur_starts: u8,
+    slur_ends: u8,
 }
 
 /// Lays a hymn out in lines.
@@ -54,14 +75,40 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
     // The verse number each row showed last: it is printed where it first stands, not again
     // on every line of music.
     let mut shown: Vec<String> = Vec::new();
+    // Beams: notes with flags that follow each other with no space between them.
+    let mut groups = 0usize;
+    let mut run: Vec<(usize, usize)> = Vec::new();
+    fn close_run(run: &mut Vec<(usize, usize)>, bars: &mut [Vec<Atom>], groups: &mut usize) {
+        if run.len() >= 2 {
+            for (bar, atom) in run.iter() {
+                if let Some(note) = bars[*bar][*atom].note.as_mut() {
+                    note.beam = Some(*groups);
+                }
+            }
+            *groups += 1;
+        }
+        run.clear();
+    }
+    let mut slurs_opening = 0u8;
     for line in &tune.lines {
         let mut note_index = 0usize;
         let mut pending: Vec<Decoration> = Vec::new();
         for element in &line.elements {
+            if !matches!(element.kind, ElementKind::Note(_) | ElementKind::SlurStart | ElementKind::SlurEnd) {
+                close_run(&mut run, &mut bars, &mut groups);
+            }
             match &element.kind {
                 ElementKind::Note(note) => {
                     let mut atom = note_atom(note, &pending);
                     pending.clear();
+                    if let Some(parts) = atom.note.as_mut() {
+                        parts.slur_starts = std::mem::take(&mut slurs_opening);
+                        if parts.flags == 0 {
+                            close_run(&mut run, &mut bars, &mut groups);
+                        } else {
+                            run.push((bars.len() - 1, bars.last().map_or(0, Vec::len)));
+                        }
+                    }
                     let centre = MusicGlyph::NoteheadBlack.metrics().advance / 2.0 + atom_lead(note);
                     for (row, lyrics) in line.lyrics.iter().enumerate() {
                         if let Some(slot) = lyrics.slots.get(note_index) {
@@ -101,13 +148,18 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
                 }
                 ElementKind::Metre(metre) => push(&mut bars, metre_atom(*metre)),
                 ElementKind::Key(new) => push(&mut bars, key_atom(*new)),
-                ElementKind::Ending(_)
-                | ElementKind::SlurStart
-                | ElementKind::SlurEnd
-                | ElementKind::Triplet
-                | ElementKind::Space => {}
+                ElementKind::SlurStart => slurs_opening += 1,
+                ElementKind::SlurEnd => {
+                    // It ends on the note before it.
+                    let last = bars.iter_mut().rev().flat_map(|bar| bar.iter_mut().rev()).find_map(|a| a.note.as_mut());
+                    if let Some(note) = last {
+                        note.slur_ends += 1;
+                    }
+                }
+                ElementKind::Ending(_) | ElementKind::Triplet | ElementKind::Space => {}
             }
         }
+        close_run(&mut run, &mut bars, &mut groups);
     }
     bars.retain(|bar| !bar.is_empty());
 
@@ -175,19 +227,127 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
             x += atom.width;
         }
         let mut bar_start = 0.0f32;
+        // What spans notes: the stems under each beam, an open tie, the open slurs.
+        let mut beams: Vec<(usize, Vec<Beamed>)> = Vec::new();
+        let mut tie: Option<(f32, f32)> = None;
+        let mut slurs: Vec<(f32, f32)> = Vec::new();
         for (bar, width) in bars[first..end].iter().zip(&widths[first..end]) {
             for atom in bar {
                 // A bar line stands at the end of its bar, however far the bar is spread.
                 let at = if atom.ends_bar { (bar_start + width) * stretch - atom.width } else { (bar_start + atom.x) * stretch };
-                place(&mut line, atom, prefix_width + at, measure, size);
+                let x = prefix_width + at;
+                place(&mut line, atom, x, measure, size);
+                let Some(note) = &atom.note else { continue };
+                let (left, right) = (x + note.head.0, x + note.head.1);
+                // A bow lies on the side away from the stem.
+                let above = note.pitch >= MIDDLE;
+                let side = if above { 1.2 } else { -1.2 };
+                if let Some((from, pitch)) = tie.take() {
+                    if pitch == note.pitch {
+                        line.curves.push(Curve { x0: from, pitch0: pitch + side, x1: left - 0.02, pitch1: pitch + side, above });
+                    }
+                }
+                if note.tie {
+                    tie = Some((right + 0.02, note.pitch));
+                }
+                for _ in 0..note.slur_ends {
+                    if let Some((from, pitch)) = slurs.pop() {
+                        let centre = (left + right) / 2.0;
+                        let above = (pitch + note.pitch) / 2.0 >= MIDDLE;
+                        let side = if above { 1.4 } else { -1.4 };
+                        line.curves.push(Curve { x0: from, pitch0: pitch + side, x1: centre, pitch1: note.pitch + side, above });
+                    }
+                }
+                for _ in 0..note.slur_starts {
+                    slurs.push(((left + right) / 2.0, note.pitch));
+                }
+                match note.beam {
+                    Some(group) => {
+                        let stem = Beamed { up: right - STEM, down: left, pitch: note.pitch, flags: note.flags };
+                        match beams.last_mut().filter(|(g, _)| *g == group) {
+                            Some((_, stems)) => stems.push(stem),
+                            None => beams.push((group, vec![stem])),
+                        }
+                    }
+                    None => {
+                        for rule in &note.stem {
+                            line.rules.push(Rule { x: rule.x + x, ..*rule });
+                            line.highest = line.highest.max(rule.top);
+                            line.lowest = line.lowest.min(rule.top - rule.height);
+                        }
+                        for flag in &note.flag {
+                            line.music.push(PlacedMusic { x: flag.x + x, ..*flag });
+                        }
+                    }
+                }
             }
             bar_start += width;
+        }
+        for (_, stems) in &beams {
+            beam(&mut line, stems);
+        }
+        for curve in &line.curves {
+            line.highest = line.highest.max(curve.pitch0.max(curve.pitch1) + if curve.above { 2.0 } else { 0.0 });
+            line.lowest = line.lowest.min(curve.pitch0.min(curve.pitch1) - if curve.above { 0.0 } else { 2.0 });
         }
         engraving.lines.push(line);
         first = end;
         on_first_line = false;
     }
     engraving
+}
+
+/// A note under a beam: where its stem stands if it points up or down, and its pitch.
+struct Beamed {
+    up: f32,
+    down: f32,
+    pitch: f32,
+    flags: u8,
+}
+
+/// Draws the stems of a group of notes and the level beam that joins them.
+fn beam(line: &mut Line, stems: &[Beamed]) {
+    let (Some(first), Some(last)) = (stems.first(), stems.last()) else { return };
+    let mean = stems.iter().map(|s| s.pitch).sum::<f32>() / stems.len() as f32;
+    let up = mean < MIDDLE;
+    // A beam is half a staff space thick.
+    let thick = 1.0;
+    let highest = stems.iter().map(|s| s.pitch).fold(f32::MIN, f32::max);
+    let lowest = stems.iter().map(|s| s.pitch).fold(f32::MAX, f32::min);
+    // The far edge of the beam, a stem's length from the note nearest to it.
+    let edge = if up { highest + STEM_LENGTH } else { lowest - STEM_LENGTH };
+    for stem in stems {
+        let rule = if up {
+            Rule { x: stem.up, top: edge, width: STEM, height: edge - stem.pitch - 0.3 }
+        } else {
+            Rule { x: stem.down, top: stem.pitch - 0.3, width: STEM, height: stem.pitch - 0.3 - edge }
+        };
+        line.rules.push(rule);
+    }
+    let x_of = |s: &Beamed| if up { s.up } else { s.down };
+    let mut bar = |from: &Beamed, to: &Beamed, level: f32| {
+        let top = if up { edge - level * 1.5 } else { edge + thick + level * 1.5 };
+        line.rules.push(Rule { x: x_of(from), top, width: x_of(to) + STEM - x_of(from), height: thick });
+    };
+    bar(first, last, 0.0);
+    // A second beam over each stretch of sixteenths.
+    let mut start: Option<usize> = None;
+    for (k, stem) in stems.iter().enumerate() {
+        let short = stem.flags >= 2;
+        if short && start.is_none() {
+            start = Some(k);
+        }
+        let ends = !short || k + 1 == stems.len();
+        if let Some(from) = start.filter(|_| ends) {
+            let to = if short { k } else { k - 1 };
+            if to > from {
+                bar(&stems[from], &stems[to], 1.0);
+            }
+            start = None;
+        }
+    }
+    line.highest = line.highest.max(edge.max(highest) + 1.0);
+    line.lowest = line.lowest.min(edge.min(lowest) - 1.0);
 }
 
 fn push(bars: &mut Vec<Vec<Atom>>, atom: Atom) {
@@ -304,27 +464,34 @@ fn note_atom(note: &Note, decorations: &[Decoration]) -> Atom {
         at += 2.0;
     }
 
+    let mut parts = NoteParts {
+        pitch,
+        head: (lead, lead + head_width),
+        stem: Vec::new(),
+        flag: Vec::new(),
+        flags: if has_stem { flags } else { 0 },
+        beam: None,
+        tie: note.tie,
+        slur_starts: 0,
+        slur_ends: 0,
+    };
     if has_stem {
         // Up for notes below the middle line, down from there on.
         let up = pitch < MIDDLE;
-        if up {
-            let x = lead + head_width - STEM;
-            atom.rules.push(Rule { x, top: pitch + STEM_LENGTH, width: STEM, height: STEM_LENGTH - 0.3 });
-            match flags {
-                0 => {}
-                1 => atom.music.push(PlacedMusic { glyph: MusicGlyph::Flag8thUp, x, pitch: pitch + STEM_LENGTH }),
-                _ => atom.music.push(PlacedMusic { glyph: MusicGlyph::Flag16thUp, x, pitch: pitch + STEM_LENGTH }),
-            }
+        let (x, end, glyphs) = if up {
+            (lead + head_width - STEM, pitch + STEM_LENGTH, [MusicGlyph::Flag8thUp, MusicGlyph::Flag16thUp])
         } else {
-            let x = lead;
-            atom.rules.push(Rule { x, top: pitch - 0.3, width: STEM, height: STEM_LENGTH - 0.3 });
-            match flags {
-                0 => {}
-                1 => atom.music.push(PlacedMusic { glyph: MusicGlyph::Flag8thDown, x, pitch: pitch - STEM_LENGTH }),
-                _ => atom.music.push(PlacedMusic { glyph: MusicGlyph::Flag16thDown, x, pitch: pitch - STEM_LENGTH }),
-            }
+            (lead, pitch - STEM_LENGTH, [MusicGlyph::Flag8thDown, MusicGlyph::Flag16thDown])
+        };
+        let top = if up { end } else { pitch - 0.3 };
+        parts.stem.push(Rule { x, top, width: STEM, height: STEM_LENGTH - 0.3 });
+        match flags {
+            0 => {}
+            1 => parts.flag.push(PlacedMusic { glyph: glyphs[0], x, pitch: end }),
+            _ => parts.flag.push(PlacedMusic { glyph: glyphs[1], x, pitch: end }),
         }
     }
+    atom.note = Some(parts);
     // A dot beside a note on a line stands in the space above it.
     let dot_pitch = if note.step.rem_euclid(2) == 0 { pitch + 1.0 } else { pitch };
     for dot in 0..dots {
@@ -586,6 +753,43 @@ mod tests {
         }
         let syllables: usize = e.lines.iter().map(|l| l.lyrics.len()).sum();
         assert_eq!(syllables, 2 * 34);
+    }
+
+    #[test]
+    fn short_notes_without_a_space_share_a_beam() {
+        use MusicGlyph::*;
+        // Two eighths together, then two apart.
+        let e = engraved("F/G/ A/ B/ c |]", 18.0);
+        let line = &e.lines[0];
+        // The pair has no flags, the two single ones have one each.
+        assert_eq!(glyphs(line).iter().filter(|g| matches!(g, Flag8thUp | Flag8thDown)).count(), 2);
+        // One beam: a rule half a staff space thick that reaches from the first stem to the second.
+        let beams: Vec<&Rule> = line.rules.iter().filter(|r| r.height == 1.0 && r.width > 0.1).collect();
+        assert_eq!(beams.len(), 1, "{:?}", line.rules);
+        let heads: Vec<&PlacedMusic> = line.music.iter().filter(|g| g.glyph == NoteheadBlack).collect();
+        assert!(beams[0].x > heads[0].x && beams[0].x + beams[0].width > heads[1].x);
+        // Sixteenths get a second one.
+        let e = engraved("F/4G/4A/4B/4 c2 |]", 18.0);
+        assert_eq!(e.lines[0].rules.iter().filter(|r| r.height == 1.0 && r.width > 0.1).count(), 2);
+    }
+
+    #[test]
+    fn ties_and_slurs_are_bows() {
+        let e = engraved("F2 A- | A (G F) |]", 18.0);
+        let line = &e.lines[0];
+        assert_eq!(line.curves.len(), 2);
+        let heads: Vec<&PlacedMusic> =
+            line.music.iter().filter(|g| matches!(g.glyph, MusicGlyph::NoteheadBlack | MusicGlyph::NoteheadHalf)).collect();
+        // The tie runs from the second note to the third, level, under notes with stems up.
+        let tie = &line.curves[0];
+        assert!(tie.x0 > heads[1].x && tie.x1 < heads[2].x + 0.01, "{tie:?}");
+        assert_eq!(tie.pitch0, tie.pitch1);
+        assert!(!tie.above);
+        // The slur runs from the fourth to the fifth.
+        let slur = &line.curves[1];
+        assert!(slur.x0 > heads[3].x && slur.x1 > heads[4].x, "{slur:?}");
+        let html = crate::html::score(&e);
+        assert_eq!(html.matches("<svg class=\"gabc-bow\"").count(), 2);
     }
 
     #[test]

@@ -57,7 +57,7 @@ fn render(language: u32, source: &str, width: f32, size: f32) -> String {
         Language::Abc => abc::parse(source).diagnostics,
         Language::Gabc => gabc::parse(source).diagnostics,
     };
-    let html = gabc_rs::render(language, source, &options).unwrap_or_default();
+    let html = gabc_rs::render_in(language, source, &options, "currentColor").unwrap_or_default();
     let style = gabc_rs::html::style_in("var(--gabc-size, 34px)", options.lyric_size, "currentColor");
     let list: Vec<String> = diagnostics.iter().map(|d| diagnostic(d, source)).collect();
     format!("{{\"html\":{},\"style\":{},\"diagnostics\":[{}]}}", quote(&html), quote(&style), list.join(","))

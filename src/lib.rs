@@ -29,6 +29,17 @@ pub fn render(
     source: &str,
     options: &layout::Options,
 ) -> Result<String, Vec<Diagnostic>> {
+    render_in(language, source, options, "#000000")
+}
+
+/// [`render`] with the colour of the ink given: `"currentColor"` for a page with colours of
+/// its own, to go with the rules of [`html::style_in`].
+pub fn render_in(
+    language: markdown::Language,
+    source: &str,
+    options: &layout::Options,
+    ink: &str,
+) -> Result<String, Vec<Diagnostic>> {
     let (diagnostics, engraving) = match language {
         markdown::Language::Abc => {
             let parsed = abc::parse(source);
@@ -42,7 +53,7 @@ pub fn render(
         }
     };
     match engraving {
-        Some(engraving) => Ok(html::score(&engraving)),
+        Some(engraving) => Ok(html::score_in(&engraving, ink)),
         None => Err(diagnostics),
     }
 }

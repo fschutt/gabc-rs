@@ -58,6 +58,17 @@ pub struct PlacedMusic {
     pub pitch: f32,
 }
 
+/// A tie or slur: a thin bow from one point to another.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Curve {
+    pub x0: f32,
+    pub pitch0: f32,
+    pub x1: f32,
+    pub pitch1: f32,
+    /// True if the bow arches upwards.
+    pub above: bool,
+}
+
 /// A syllable's text at its place.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lyric {
@@ -85,6 +96,7 @@ pub struct Line {
     pub glyphs: Vec<PlacedGlyph>,
     pub music: Vec<PlacedMusic>,
     pub rules: Vec<Rule>,
+    pub curves: Vec<Curve>,
     pub lyrics: Vec<Lyric>,
     /// The highest and lowest pitch drawn on the line, staff included.
     pub highest: f32,
@@ -103,6 +115,7 @@ impl Default for Line {
             glyphs: Vec::new(),
             music: Vec::new(),
             rules: Vec::new(),
+            curves: Vec::new(),
             lyrics: Vec::new(),
             highest: TOP_LINE,
             lowest: BOTTOM_LINE,

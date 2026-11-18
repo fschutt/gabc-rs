@@ -2,7 +2,7 @@
 
 Gregorian chant notation (GABC) and metered hymns (ABC) rendered through one HTML+CSS string into PDF, PNG and the browser.
 
-**Status: early.** The parsers and the checker work. Chant and hymns are drawn in a first version: neumes on four lines, round notes on five, with clef, bars, lyrics and line breaks. Still to come: real text metrics, ties, slurs and beams, the drop cap, PDF and PNG straight from the library.
+**Status: early.** The parsers and the checker work. Chant and hymns are drawn in a first version: neumes on four lines, round notes on five, with clef, bars, lyrics and line breaks. Still to come: real text metrics, the drop cap, PDF and PNG straight from the library.
 
 - `gabc check <files or directories>`: checks `.gabc` and `.abc` files and the notation blocks of Markdown files, and prints every problem as `path:line:col: error[E011]: message`.
 - `gabc html <file.gabc or file.abc>`: the score as an HTML document, which printpdf turns into a PDF and azul into a PNG.

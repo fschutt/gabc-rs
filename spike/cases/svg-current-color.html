@@ -1,0 +1,9 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"/><style>
+body { font-family: "Helvetica"; font-size: 12pt; margin: 0; color: #b00000; }
+.box { width: 120px; height: 40px; margin-bottom: 8pt; background: #dddddd; }
+</style></head><body>
+<p>Three bows. Expected: black, then twice in the red of this text.</p>
+<div class="box"><svg width="120" height="40" viewBox="0 0 120 40"><path d="M5 30 Q60 -10 115 30 Q60 5 5 30 Z" fill="#000000"/></svg></div>
+<div class="box"><svg width="120" height="40" viewBox="0 0 120 40"><path d="M5 30 Q60 -10 115 30 Q60 5 5 30 Z" fill="currentColor"/></svg></div>
+<div class="box" style="color: #b00000"><svg width="120" height="40" viewBox="0 0 120 40"><path d="M5 30 Q60 -10 115 30 Q60 5 5 30 Z" fill="currentColor"/></svg></div>
+</body></html>

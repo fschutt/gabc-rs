@@ -31,23 +31,30 @@ pub fn style_in(size: &str, lyric_size: f32, ink: &str) -> String {
          .gabc-rule {{ position: absolute; background: {ink}; }}\n\
          .gabc-g {{ position: absolute; font-family: \"{NEUME_FAMILY}\"; font-size: 1em; line-height: 1; }}\n\
          .gabc-m {{ position: absolute; font-family: \"{MUSIC_FAMILY}\"; font-size: 1em; line-height: 1; }}\n\
+         .gabc-bow {{ position: absolute; overflow: visible; }}\n\
          .gabc-ly {{ position: absolute; font-size: {lyric_size}em; line-height: 1; white-space: nowrap; }}\n\
          .gabc-sc {{ font-variant: small-caps; }}\n\
          .gabc-c {{ color: #b00000; }}\n"
     )
 }
 
-/// The score as a `<div class="gabc-score">` with one block per line.
+/// The score as a `<div class="gabc-score">` with one block per line, in black.
 pub fn score(engraving: &Engraving) -> String {
+    score_in(engraving, "#000000")
+}
+
+/// [`score`] with the colour of the ink given, as for [`style_in`]. The bows of ties and
+/// slurs are SVG paths and carry their colour themselves.
+pub fn score_in(engraving: &Engraving, ink: &str) -> String {
     let mut out = String::from("<div class=\"gabc-score\">\n");
     for line in &engraving.lines {
-        self::line(&mut out, line, engraving);
+        self::line(&mut out, line, engraving, ink);
     }
     out.push_str("</div>\n");
     out
 }
 
-fn line(out: &mut String, line: &Line, engraving: &Engraving) {
+fn line(out: &mut String, line: &Line, engraving: &Engraving, ink: &str) {
     let size = engraving.lyric_size;
     let _ = writeln!(
         out,
@@ -81,6 +88,32 @@ fn line(out: &mut String, line: &Line, engraving: &Engraving) {
             glyph.x,
             line.y(glyph.pitch) - 0.5,
             glyph.glyph.char()
+        );
+    }
+    for curve in &line.curves {
+        // A bow as a thin lens: an SVG as wide as the bow, its path in hundredths of an em.
+        let width = (curve.x1 - curve.x0).max(0.05);
+        let rise = (0.1 + 0.05 * width).min(0.3);
+        let (y0, y1) = (line.y(curve.pitch0), line.y(curve.pitch1));
+        let top = y0.min(y1) - rise - 0.02;
+        let height = (y0 - y1).abs() + rise + 0.04;
+        let unit = |em: f32| (em * 100.0).round();
+        let (a, b) = (unit(y0 - top), unit(y1 - top));
+        // The middle of the bow, away from the notes, and its inner edge a little nearer.
+        let outer = if curve.above { unit(y0.min(y1) - top - rise) * 2.0 - (a + b) / 2.0 } else { unit(y0.max(y1) - top + rise) * 2.0 - (a + b) / 2.0 };
+        let inner = outer + if curve.above { 7.0 } else { -7.0 };
+        let w = unit(width);
+        let _ = writeln!(
+            out,
+            "<svg class=\"gabc-bow\" style=\"left:{:.4}em;top:{:.4}em;width:{:.4}em;height:{:.4}em\" viewBox=\"0 0 {w} {}\">\
+             <path d=\"M0 {a} Q{} {outer} {w} {b} Q{} {inner} 0 {a} Z\" fill=\"{ink}\"/></svg>",
+            curve.x0,
+            top,
+            width,
+            height,
+            unit(height),
+            w / 2.0,
+            w / 2.0
         );
     }
     for glyph in &line.music {

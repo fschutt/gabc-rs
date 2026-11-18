@@ -11,6 +11,7 @@ Found on 2026-11-18 with printpdf 0.12.9, azul-layout / azul-core / azul-css 0.0
 | E3 | A line without text reports an unresolved font | [azul#484](https://github.com/fschutt/azul/pull/484) | released: azul 0.0.18 |
 | E4 | Page images get LCD colour fringes, no way to choose | [azul#484](https://github.com/fschutt/azul/pull/484) | released: azul 0.0.18 |
 | E5 | Background of an absolutely positioned `<span>` not painted | [azul#484](https://github.com/fschutt/azul/pull/484) | released: azul 0.0.18 |
+| E6 | Inline SVG: `fill="currentColor"` draws nothing | [azul#485](https://github.com/fschutt/azul/issues/485) | open, not fixed yet |
 | | No public way to build a font from outlines | [allsorts-azul#3](https://github.com/fschutt/allsorts-azul/pull/3) | open for review |
 
 gabc-rs builds against the released crates, with no patches. With them, `spike/cases/svg-path-fill.html` and `spike/cases/text-ink-clip.html` render the same in the PDF and in the PNG. The sections below describe each finding and its cause.
@@ -95,3 +96,11 @@ Fix: `parent_paints_as_inline_shape` answers no for `absolute` and `fixed` boxes
 ## Added to allsorts-azul
 
 `allsorts::font_builder` (`TrueTypeBuilder`, `Outline`) on branch `feat/font-builder`, based on `azul-fork-0.17`: builds a TrueType font from outlines, with cubic-to-quadratic conversion. `subset::FontBuilder` was crate-private, so there was no public way to assemble a font from scratch. `xtask font` uses it to build `assets/fonts/gabc-neumes.ttf`.
+
+## E6. Inline SVG: `fill="currentColor"` draws nothing
+
+Case: `spike/cases/svg-current-color.html`. Found on 2026-11-19 with printpdf 0.12.11 and azul-layout 0.0.18.
+
+A path with `fill="currentColor"` in an inline `<svg>` is not painted, in the PDF and in the PNG; with `fill="#000000"` it is. The bows of ties and slurs are such paths.
+
+Not fixed yet; reported as https://github.com/fschutt/azul/issues/485. gabc-rs does not depend on it: the colour of the ink is a parameter (`html::score_in`, `render_in`), black where a PDF or PNG is made, and `currentColor` only where the page is shown by a browser.
