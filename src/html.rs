@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 
 use crate::layout::{Engraving, Line};
-use crate::neume::{LINE_WEIGHT, STEP};
+use crate::neume::STEP;
 
 /// The family name of the neume font (`assets/fonts/gabc-neumes.ttf`).
 pub const NEUME_FAMILY: &str = "Gabc Neumes";
@@ -65,9 +65,10 @@ fn line(out: &mut String, line: &Line, engraving: &Engraving, ink: &str) {
     for &pitch in &line.staff {
         let _ = writeln!(
             out,
-            "<div class=\"gabc-rule\" style=\"left:0;top:{:.4}em;width:{:.4}em;height:{LINE_WEIGHT}em\"></div>",
-            line.y(pitch) - LINE_WEIGHT / 2.0,
-            engraving.width
+            "<div class=\"gabc-rule\" style=\"left:0;top:{:.4}em;width:{:.4}em;height:{:.4}em\"></div>",
+            line.y(pitch) - line.staff_weight / 2.0,
+            engraving.width,
+            line.staff_weight
         );
     }
     for rule in &line.rules {
@@ -101,7 +102,9 @@ fn line(out: &mut String, line: &Line, engraving: &Engraving, ink: &str) {
         let (a, b) = (unit(y0 - top), unit(y1 - top));
         // The middle of the bow, away from the notes, and its inner edge a little nearer.
         let outer = if curve.above { unit(y0.min(y1) - top - rise) * 2.0 - (a + b) / 2.0 } else { unit(y0.max(y1) - top + rise) * 2.0 - (a + b) / 2.0 };
-        let inner = outer + if curve.above { 7.0 } else { -7.0 };
+        // The control point of the inner edge: twice the thickness nearer, so that the middle
+        // of the bow is as thick as asked for.
+        let inner = outer + unit(curve.thickness) * if curve.above { 2.0 } else { -2.0 };
         let w = unit(width);
         let _ = writeln!(
             out,

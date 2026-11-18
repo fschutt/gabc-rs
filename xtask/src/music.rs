@@ -30,6 +30,24 @@ use allsorts::tag;
 const SOURCE: &str = "https://raw.githubusercontent.com/steinbergmedia/bravura/master/redist";
 const UNITS_PER_EM: u16 = 2048;
 
+/// The measures of Bravura's own metadata that the layout uses, in staff spaces there and in
+/// em in the table that is written (a staff space is a quarter of an em).
+const DEFAULTS: &[(&str, &str, &str)] = &[
+    ("STAFF_LINE", "staffLineThickness", "The weight of a staff line."),
+    ("STEM", "stemThickness", "The weight of a stem."),
+    ("LEDGER_LINE", "legerLineThickness", "The weight of a ledger line."),
+    ("LEDGER_EXTENSION", "legerLineExtension", "How far a ledger line reaches beyond the note head, on each side."),
+    ("THIN_BARLINE", "thinBarlineThickness", "The weight of a bar line."),
+    ("THICK_BARLINE", "thickBarlineThickness", "The weight of the thick line of a final or repeat bar."),
+    ("BARLINE_SEPARATION", "barlineSeparation", "The room between the two lines of a double bar."),
+    ("THIN_THICK_SEPARATION", "thinThickBarlineSeparation", "The room between the thin and the thick line of a final bar."),
+    ("REPEAT_DOT_SEPARATION", "repeatBarlineDotSeparation", "The room between a repeat bar and its dots."),
+    ("BEAM", "beamThickness", "The thickness of a beam."),
+    ("BEAM_SPACING", "beamSpacing", "The room between two beams."),
+    ("TIE_END", "tieEndpointThickness", "The thickness of a tie or slur at its ends."),
+    ("TIE_MIDDLE", "tieMidpointThickness", "The thickness of a tie or slur in its middle."),
+];
+
 /// The glyphs taken over, with their SMuFL code points. Only ever appended to.
 const GLYPHS: &[(&str, u32)] = &[
     ("GClef", 0xE050),
@@ -116,7 +134,7 @@ impl OutlineSink for Copy {
 pub fn build(root: &Path) -> Result<(), String> {
     let cache = root.join("target/ref/bravura");
     std::fs::create_dir_all(&cache).map_err(|e| format!("{}: {e}", cache.display()))?;
-    for file in ["otf/Bravura.otf", "OFL.txt"] {
+    for file in ["otf/Bravura.otf", "OFL.txt", "Bravura.json"] {
         let name = file.rsplit('/').next().unwrap_or(file);
         let path = cache.join(name);
         if !path.exists() {
@@ -134,6 +152,8 @@ pub fn build(root: &Path) -> Result<(), String> {
     }
     let data = std::fs::read(cache.join("Bravura.otf")).map_err(|e| format!("Bravura.otf: {e}"))?;
     let licence = std::fs::read_to_string(cache.join("OFL.txt")).map_err(|e| format!("OFL.txt: {e}"))?;
+    let metadata = std::fs::read_to_string(cache.join("Bravura.json")).map_err(|e| format!("Bravura.json: {e}"))?;
+    let metadata: serde_json::Value = serde_json::from_str(&metadata).map_err(|e| format!("Bravura.json: {e}"))?;
     let error = |e: &dyn std::fmt::Display| format!("Bravura.otf: {e}");
 
     let scope = ReadScope::new(&data);
@@ -160,8 +180,21 @@ pub fn build(root: &Path) -> Result<(), String> {
         .name(14, "http://scripts.sil.org/OFL");
     builder.add_glyph(&[' '], UNITS_PER_EM / 8, Outline::new()).map_err(|e| e.to_string())?;
 
+    // Where a stem meets a note head and a flag its stem, from the metadata, in staff spaces.
+    let anchor = |name: &str, which: &str| -> Option<(f64, f64)> {
+        // `NoteheadBlack` here is `noteheadBlack` there.
+        let smufl = format!("{}{}", name[..1].to_lowercase(), &name[1..]);
+        let point = metadata["glyphsWithAnchors"][smufl.as_str()][which].as_array()?;
+        Some((point.first()?.as_f64()?, point.get(1)?.as_f64()?))
+    };
+    let mut anchors = String::new();
     let mut table = String::new();
     for (name, code) in GLYPHS {
+        for (which, function) in [("stemUpSE", "stem_up"), ("stemDownNW", "stem_down"), ("stemUpNW", "on_stem_up"), ("stemDownSW", "on_stem_down")] {
+            if let Some((x, y)) = anchor(name, which) {
+                let _ = writeln!(anchors, "            (MusicGlyph::{name}, \"{function}\") => Some(({:.5}, {:.5})),", x / 4.0, y / 4.0);
+            }
+        }
         let ch = char::from_u32(*code).ok_or("a code point that is no character")?;
         let (glyph, _) = font.lookup_glyph_index(ch, MatchingPresentation::NotRequired, None);
         if glyph == 0 {
@@ -241,7 +274,30 @@ pub fn build(root: &Path) -> Result<(), String> {
          \x20       match self {\n",
     );
     s.push_str(&table);
-    s.push_str("        }\n    }\n}\n");
+    s.push_str("        }\n    }\n\n");
+    s.push_str(
+        "    fn anchor(self, which: &str) -> Option<(f32, f32)> {\n\
+         \x20       match (self, which) {\n",
+    );
+    s.push_str(&anchors);
+    s.push_str(
+        "            _ => None,\n        }\n    }\n\n\
+         \x20   /// Where the lower right corner of a stem that points up meets this note head: to the\n\
+         \x20   /// right of the origin and above it, in em.\n\
+         \x20   pub fn stem_up(self) -> Option<(f32, f32)> {\n        self.anchor(\"stem_up\")\n    }\n\n\
+         \x20   /// Where the upper left corner of a stem that points down meets this note head.\n\
+         \x20   pub fn stem_down(self) -> Option<(f32, f32)> {\n        self.anchor(\"stem_down\")\n    }\n\n\
+         \x20   /// For a flag: where the end of its stem lies, from the flag's origin.\n\
+         \x20   pub fn on_stem(self) -> Option<(f32, f32)> {\n        self.anchor(\"on_stem_up\").or(self.anchor(\"on_stem_down\"))\n    }\n}\n\n",
+    );
+    let version = metadata["fontVersion"].as_f64().unwrap_or(0.0);
+    let _ = writeln!(s, "/// The measures of the font's engraving defaults (Bravura {version}), in em.");
+    s.push_str("pub mod engraving {\n");
+    for (constant, key, doc) in DEFAULTS {
+        let spaces = metadata["engravingDefaults"][*key].as_f64().ok_or_else(|| format!("Bravura.json has no {key}"))?;
+        let _ = writeln!(s, "    /// {doc}\n    pub const {constant}: f32 = {:.5};", spaces / 4.0);
+    }
+    s.push_str("}\n");
     std::fs::write(root.join("src/music_glyphs.rs"), s).map_err(|e| format!("src/music_glyphs.rs: {e}"))?;
     println!("\nwrote assets/fonts/gabc-music.ttf ({} bytes, {glyphs} glyphs)", bytes.len());
     Ok(())

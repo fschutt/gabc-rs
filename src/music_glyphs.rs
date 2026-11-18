@@ -132,4 +132,66 @@ impl MusicGlyph {
             MusicGlyph::Rest16th => m(0.31982, 0.00000, 0.32000, 0.17900, 0.50000),
         }
     }
+
+    fn anchor(self, which: &str) -> Option<(f32, f32)> {
+        match (self, which) {
+            (MusicGlyph::NoteheadDoubleWhole, "stem_up") => Some((0.50900, 0.00100)),
+            (MusicGlyph::NoteheadDoubleWhole, "stem_down") => Some((0.09000, 0.00100)),
+            (MusicGlyph::NoteheadHalf, "stem_up") => Some((0.29500, 0.04200)),
+            (MusicGlyph::NoteheadHalf, "stem_down") => Some((0.00000, -0.04200)),
+            (MusicGlyph::NoteheadBlack, "stem_up") => Some((0.29500, 0.04200)),
+            (MusicGlyph::NoteheadBlack, "stem_down") => Some((0.00000, -0.04200)),
+            (MusicGlyph::Flag8thUp, "on_stem_up") => Some((0.00000, -0.01000)),
+            (MusicGlyph::Flag8thDown, "on_stem_down") => Some((0.00000, 0.03300)),
+            (MusicGlyph::Flag16thUp, "on_stem_up") => Some((0.00000, -0.02200)),
+            (MusicGlyph::Flag16thDown, "on_stem_down") => Some((0.00000, 0.03200)),
+            _ => None,
+        }
+    }
+
+    /// Where the lower right corner of a stem that points up meets this note head: to the
+    /// right of the origin and above it, in em.
+    pub fn stem_up(self) -> Option<(f32, f32)> {
+        self.anchor("stem_up")
+    }
+
+    /// Where the upper left corner of a stem that points down meets this note head.
+    pub fn stem_down(self) -> Option<(f32, f32)> {
+        self.anchor("stem_down")
+    }
+
+    /// For a flag: where the end of its stem lies, from the flag's origin.
+    pub fn on_stem(self) -> Option<(f32, f32)> {
+        self.anchor("on_stem_up").or(self.anchor("on_stem_down"))
+    }
+}
+
+/// The measures of the font's engraving defaults (Bravura 1.482), in em.
+pub mod engraving {
+    /// The weight of a staff line.
+    pub const STAFF_LINE: f32 = 0.03250;
+    /// The weight of a stem.
+    pub const STEM: f32 = 0.03000;
+    /// The weight of a ledger line.
+    pub const LEDGER_LINE: f32 = 0.04000;
+    /// How far a ledger line reaches beyond the note head, on each side.
+    pub const LEDGER_EXTENSION: f32 = 0.10000;
+    /// The weight of a bar line.
+    pub const THIN_BARLINE: f32 = 0.04000;
+    /// The weight of the thick line of a final or repeat bar.
+    pub const THICK_BARLINE: f32 = 0.12500;
+    /// The room between the two lines of a double bar.
+    pub const BARLINE_SEPARATION: f32 = 0.10000;
+    /// The room between the thin and the thick line of a final bar.
+    pub const THIN_THICK_SEPARATION: f32 = 0.10000;
+    /// The room between a repeat bar and its dots.
+    pub const REPEAT_DOT_SEPARATION: f32 = 0.04000;
+    /// The thickness of a beam.
+    pub const BEAM: f32 = 0.12500;
+    /// The room between two beams.
+    pub const BEAM_SPACING: f32 = 0.06250;
+    /// The thickness of a tie or slur at its ends.
+    pub const TIE_END: f32 = 0.02500;
+    /// The thickness of a tie or slur in its middle.
+    pub const TIE_MIDDLE: f32 = 0.05500;
 }

@@ -67,6 +67,8 @@ pub struct Curve {
     pub pitch1: f32,
     /// True if the bow arches upwards.
     pub above: bool,
+    /// How thick it is in its middle, in em.
+    pub thickness: f32,
 }
 
 /// A syllable's text at its place.
@@ -93,6 +95,8 @@ pub struct Span {
 pub struct Line {
     /// The pitches of the staff lines: four for chant, five for a hymn.
     pub staff: Vec<f32>,
+    /// The weight of a staff line, in em.
+    pub staff_weight: f32,
     pub glyphs: Vec<PlacedGlyph>,
     pub music: Vec<PlacedMusic>,
     pub rules: Vec<Rule>,
@@ -112,6 +116,7 @@ impl Default for Line {
     fn default() -> Self {
         Line {
             staff: vec![3.0, 5.0, 7.0, 9.0],
+            staff_weight: LINE_WEIGHT,
             glyphs: Vec::new(),
             music: Vec::new(),
             rules: Vec::new(),

@@ -16,16 +16,17 @@
 
 use crate::abc::{Bar, Decoration, ElementKind, Fraction, Key, Metre, Note, SlotKind, Tune};
 use crate::layout::{Curve, Engraving, Line, Lyric, Options, PlacedMusic, Rule, Span};
-use crate::music_glyphs::MusicGlyph;
-use crate::neume::{LINE_WEIGHT, STEP};
+use crate::music_glyphs::{engraving, MusicGlyph};
+use crate::neume::STEP;
 
 const STAFF: [f32; 5] = [2.0, 4.0, 6.0, 8.0, 10.0];
 const TOP: f32 = 10.0;
 const BOTTOM: f32 = 2.0;
 const MIDDLE: f32 = 6.0;
-/// The weight of stems, bar lines and ledger lines.
-const STEM: f32 = LINE_WEIGHT * 1.2;
-/// A stem is three and a half staff spaces long.
+/// The weight of a stem, from the font's own measures like the other weights used here.
+const STEM: f32 = engraving::STEM;
+/// A stem is three and a half staff spaces long: an octave, by the convention of engraving.
+/// (The font's metadata gives weights and attachment points, not lengths.)
 const STEM_LENGTH: f32 = 7.0;
 
 /// One thing in the row of music with what belongs to it, placed from its own left edge.
@@ -52,6 +53,10 @@ struct NoteParts {
     pitch: f32,
     /// The left and right edge of the head, from the atom's left edge.
     head: (f32, f32),
+    /// Where a stem that points up, and one that points down, starts: its left edge from the
+    /// atom's left edge, and the pitch at which it leaves the head.
+    stem_up: (f32, f32),
+    stem_down: (f32, f32),
     /// Its own stem and flag, drawn unless the note is under a beam.
     stem: Vec<Rule>,
     flag: Vec<PlacedMusic>,
@@ -220,7 +225,13 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
         let last = end == bars.len();
         // Spread the bars over the line. The last line is only spread if it is nearly full.
         let stretch = if natural > 0.0 && (!last || natural > room * 0.8) { (room / natural).min(1.8) } else { 1.0 };
-        let mut line = Line { staff: STAFF.to_vec(), highest: TOP, lowest: BOTTOM, ..Line::default() };
+        let mut line = Line {
+            staff: STAFF.to_vec(),
+            staff_weight: engraving::STAFF_LINE,
+            highest: TOP,
+            lowest: BOTTOM,
+            ..Line::default()
+        };
         let mut x = 0.0f32;
         for atom in &prefix {
             place(&mut line, atom, x, measure, size);
@@ -244,7 +255,14 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
                 let side = if above { 1.2 } else { -1.2 };
                 if let Some((from, pitch)) = tie.take() {
                     if pitch == note.pitch {
-                        line.curves.push(Curve { x0: from, pitch0: pitch + side, x1: left - 0.02, pitch1: pitch + side, above });
+                        line.curves.push(Curve {
+                            x0: from,
+                            pitch0: pitch + side,
+                            x1: left - 0.02,
+                            pitch1: pitch + side,
+                            above,
+                            thickness: engraving::TIE_MIDDLE,
+                        });
                     }
                 }
                 if note.tie {
@@ -255,7 +273,14 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
                         let centre = (left + right) / 2.0;
                         let above = (pitch + note.pitch) / 2.0 >= MIDDLE;
                         let side = if above { 1.4 } else { -1.4 };
-                        line.curves.push(Curve { x0: from, pitch0: pitch + side, x1: centre, pitch1: note.pitch + side, above });
+                        line.curves.push(Curve {
+                            x0: from,
+                            pitch0: pitch + side,
+                            x1: centre,
+                            pitch1: note.pitch + side,
+                            above,
+                            thickness: engraving::TIE_MIDDLE,
+                        });
                     }
                 }
                 for _ in 0..note.slur_starts {
@@ -263,7 +288,12 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
                 }
                 match note.beam {
                     Some(group) => {
-                        let stem = Beamed { up: right - STEM, down: left, pitch: note.pitch, flags: note.flags };
+                        let stem = Beamed {
+                            up: (x + note.stem_up.0, note.stem_up.1),
+                            down: (x + note.stem_down.0, note.stem_down.1),
+                            pitch: note.pitch,
+                            flags: note.flags,
+                        };
                         match beams.last_mut().filter(|(g, _)| *g == group) {
                             Some((_, stems)) => stems.push(stem),
                             None => beams.push((group, vec![stem])),
@@ -297,10 +327,11 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
     engraving
 }
 
-/// A note under a beam: where its stem stands if it points up or down, and its pitch.
+/// A note under a beam: where its stem starts if it points up or down (its left edge and the
+/// pitch at which it leaves the head), and the note's pitch.
 struct Beamed {
-    up: f32,
-    down: f32,
+    up: (f32, f32),
+    down: (f32, f32),
     pitch: f32,
     flags: u8,
 }
@@ -310,23 +341,24 @@ fn beam(line: &mut Line, stems: &[Beamed]) {
     let (Some(first), Some(last)) = (stems.first(), stems.last()) else { return };
     let mean = stems.iter().map(|s| s.pitch).sum::<f32>() / stems.len() as f32;
     let up = mean < MIDDLE;
-    // A beam is half a staff space thick.
-    let thick = 1.0;
+    let thick = engraving::BEAM / STEP;
     let highest = stems.iter().map(|s| s.pitch).fold(f32::MIN, f32::max);
     let lowest = stems.iter().map(|s| s.pitch).fold(f32::MAX, f32::min);
     // The far edge of the beam, a stem's length from the note nearest to it.
     let edge = if up { highest + STEM_LENGTH } else { lowest - STEM_LENGTH };
     for stem in stems {
         let rule = if up {
-            Rule { x: stem.up, top: edge, width: STEM, height: edge - stem.pitch - 0.3 }
+            Rule { x: stem.up.0, top: edge, width: STEM, height: edge - stem.up.1 }
         } else {
-            Rule { x: stem.down, top: stem.pitch - 0.3, width: STEM, height: stem.pitch - 0.3 - edge }
+            Rule { x: stem.down.0, top: stem.down.1, width: STEM, height: stem.down.1 - edge }
         };
         line.rules.push(rule);
     }
-    let x_of = |s: &Beamed| if up { s.up } else { s.down };
+    let x_of = |s: &Beamed| if up { s.up.0 } else { s.down.0 };
+    // From one beam to the next: its thickness and the room between two.
+    let step = (engraving::BEAM + engraving::BEAM_SPACING) / STEP;
     let mut bar = |from: &Beamed, to: &Beamed, level: f32| {
-        let top = if up { edge - level * 1.5 } else { edge + thick + level * 1.5 };
+        let top = if up { edge - level * step } else { edge + thick + level * step };
         line.rules.push(Rule { x: x_of(from), top, width: x_of(to) + STEM - x_of(from), height: thick });
     };
     bar(first, last, 0.0);
@@ -432,6 +464,18 @@ fn value(length: Fraction) -> (MusicGlyph, bool, u8, u8) {
     (head, stem, flags, dots)
 }
 
+/// Where the stem of a note head starts: its left edge, from the atom's left edge, and the
+/// pitch at which it leaves the head. The font names the corner of the head for each direction.
+fn stem_start(head: MusicGlyph, lead: f32, pitch: f32, up: bool) -> (f32, f32) {
+    if up {
+        let (ax, ay) = head.stem_up().unwrap_or((head.metrics().advance, 0.0));
+        (lead + ax - STEM, pitch + ay / STEP)
+    } else {
+        let (ax, ay) = head.stem_down().unwrap_or((0.0, 0.0));
+        (lead + ax, pitch + ay / STEP)
+    }
+}
+
 /// The room a note or rest of this length takes: longer ones more, but not in proportion.
 fn room(length: Fraction) -> f32 {
     let quarters = 4.0 * length.num as f32 / length.den as f32;
@@ -451,7 +495,13 @@ fn note_atom(note: &Note, decorations: &[Decoration]) -> Atom {
 
     // Ledger lines, below the staff and above it.
     let mut ledger = |at: f32| {
-        atom.rules.push(Rule { x: lead - 0.06, top: at + STEM / STEP / 2.0, width: head_width + 0.12, height: STEM / STEP });
+        let weight = engraving::LEDGER_LINE / STEP;
+        atom.rules.push(Rule {
+            x: lead - engraving::LEDGER_EXTENSION,
+            top: at + weight / 2.0,
+            width: head_width + 2.0 * engraving::LEDGER_EXTENSION,
+            height: weight,
+        });
     };
     let mut at = BOTTOM - 2.0;
     while at >= pitch {
@@ -467,6 +517,8 @@ fn note_atom(note: &Note, decorations: &[Decoration]) -> Atom {
     let mut parts = NoteParts {
         pitch,
         head: (lead, lead + head_width),
+        stem_up: (0.0, pitch),
+        stem_down: (0.0, pitch),
         stem: Vec::new(),
         flag: Vec::new(),
         flags: if has_stem { flags } else { 0 },
@@ -478,18 +530,21 @@ fn note_atom(note: &Note, decorations: &[Decoration]) -> Atom {
     if has_stem {
         // Up for notes below the middle line, down from there on.
         let up = pitch < MIDDLE;
-        let (x, end, glyphs) = if up {
-            (lead + head_width - STEM, pitch + STEM_LENGTH, [MusicGlyph::Flag8thUp, MusicGlyph::Flag16thUp])
+        let (x, from) = stem_start(head, lead, pitch, up);
+        let (end, glyphs) = if up {
+            (pitch + STEM_LENGTH, [MusicGlyph::Flag8thUp, MusicGlyph::Flag16thUp])
         } else {
-            (lead, pitch - STEM_LENGTH, [MusicGlyph::Flag8thDown, MusicGlyph::Flag16thDown])
+            (pitch - STEM_LENGTH, [MusicGlyph::Flag8thDown, MusicGlyph::Flag16thDown])
         };
-        let top = if up { end } else { pitch - 0.3 };
-        parts.stem.push(Rule { x, top, width: STEM, height: STEM_LENGTH - 0.3 });
-        match flags {
-            0 => {}
-            1 => parts.flag.push(PlacedMusic { glyph: glyphs[0], x, pitch: end }),
-            _ => parts.flag.push(PlacedMusic { glyph: glyphs[1], x, pitch: end }),
+        parts.stem.push(Rule { x, top: from.max(end), width: STEM, height: (from - end).abs() });
+        if flags > 0 {
+            // The flag hangs on the end of the stem by the point the font names for it.
+            let glyph = glyphs[usize::from(flags > 1)];
+            let (ax, ay) = glyph.on_stem().unwrap_or((0.0, 0.0));
+            parts.flag.push(PlacedMusic { glyph, x: x - ax, pitch: end - ay / STEP });
         }
+        parts.stem_up = stem_start(head, lead, pitch, true);
+        parts.stem_down = stem_start(head, lead, pitch, false);
     }
     atom.note = Some(parts);
     // A dot beside a note on a line stands in the space above it.
@@ -542,8 +597,11 @@ fn rest_atom(length: Fraction) -> Atom {
 
 fn bar_atom(bar: Bar) -> Atom {
     let mut atom = Atom { ends_bar: true, ..Atom::default() };
-    let thin = STEM;
-    let thick = 0.06;
+    let thin = engraving::THIN_BARLINE;
+    let thick = engraving::THICK_BARLINE;
+    let between = engraving::BARLINE_SEPARATION;
+    let to_thick = engraving::THIN_THICK_SEPARATION;
+    let to_dots = engraving::REPEAT_DOT_SEPARATION;
     let mut x = 0.12f32;
     let mut line = |x: &mut f32, weight: f32| {
         atom.rules.push(Rule { x: *x, top: TOP, width: weight, height: TOP - BOTTOM });
@@ -559,19 +617,19 @@ fn bar_atom(bar: Bar) -> Atom {
         Bar::Single => line(&mut x, thin),
         Bar::Double => {
             line(&mut x, thin);
-            x += 0.06;
+            x += between;
             line(&mut x, thin);
         }
         Bar::Final => {
             line(&mut x, thin);
-            x += 0.06;
+            x += to_thick;
             line(&mut x, thick);
         }
         Bar::RepeatStart => {
             line(&mut x, thick);
-            x += 0.06;
+            x += to_thick;
             line(&mut x, thin);
-            x += 0.06;
+            x += to_dots;
             let at = x;
             drop(line);
             dots(&mut atom, at);
@@ -579,22 +637,22 @@ fn bar_atom(bar: Bar) -> Atom {
         }
         Bar::RepeatEnd => {
             let at = x;
-            x += dot + 0.06;
+            x += dot + to_dots;
             line(&mut x, thin);
-            x += 0.06;
+            x += to_thick;
             line(&mut x, thick);
             drop(line);
             dots(&mut atom, at);
         }
         Bar::RepeatBoth => {
             let left = x;
-            x += dot + 0.06;
+            x += dot + to_dots;
             line(&mut x, thin);
-            x += 0.06;
+            x += to_thick;
             line(&mut x, thick);
-            x += 0.06;
+            x += to_thick;
             line(&mut x, thin);
-            x += 0.06;
+            x += to_dots;
             let right = x;
             drop(line);
             dots(&mut atom, left);
@@ -716,7 +774,7 @@ mod tests {
         // The number stands before its syllable.
         assert!(line.lyrics[0].x < line.lyrics[1].x);
         // Three single bars drawn, the last one with a thick line.
-        let full: Vec<&Rule> = line.rules.iter().filter(|r| r.height == 8.0).collect();
+        let full: Vec<&Rule> = line.rules.iter().filter(|r| r.height == 8.0 && r.top == 10.0).collect();
         assert_eq!(full.len(), 4);
     }
 
@@ -732,7 +790,7 @@ mod tests {
         assert!(line.rules.iter().any(|r| r.height < 1.0 && (r.top - 0.0).abs() < 0.2));
         // A note above the middle line has its stem down: the stem starts near the head.
         let high = line.music.iter().find(|g| g.pitch == 9.0).unwrap();
-        assert!(line.rules.iter().any(|r| (r.x - high.x).abs() < 1e-4 && r.top < 9.0 && r.height > 6.0));
+        assert!(line.rules.iter().any(|r| (r.x - high.x).abs() < 1e-4 && r.top < 9.0 && r.height > 6.0), "{:?}", line.rules);
     }
 
     #[test]
