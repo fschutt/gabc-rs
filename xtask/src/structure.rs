@@ -73,6 +73,11 @@ pub fn ours(score: &Score) -> String {
             }
         }
     }
+    // Gregorio reads a score that starts without a clef with a do clef on the third line.
+    let starts_with_clef = out.first().is_some_and(|t| t.starts_with(['c', 'f']) && t.ends_with(|c: char| c.is_ascii_digit()));
+    if !starts_with_clef {
+        out.insert(0, String::from("c3"));
+    }
     out.join(" ")
 }
 
@@ -102,7 +107,11 @@ pub fn from_dump(dump: &str) -> String {
         // `15 (G_PUNCTUM)` -> `G_PUNCTUM`
         let name = value.rsplit_once('(').and_then(|(_, n)| n.strip_suffix(')')).unwrap_or(value);
         match key {
-            "initial_key" => out.push(name.to_string()),
+            // A `flatted_key` line may follow it, as it does after a clef change.
+            "initial_key" => {
+                out.push(name.to_string());
+                open = Open::Clef;
+            }
             "type" => {
                 open = match name {
                     "GRE_NOTE" => Open::Note,
@@ -128,7 +137,7 @@ pub fn from_dump(dump: &str) -> String {
                 out.push(bar_token(name));
                 open = Open::Nothing;
             }
-            "clef" if open == Open::Clef => out.push(value.to_string()),
+            "clef" if open == Open::Clef => out.push(name.to_string()),
             // `c3` -> `cb3`
             "flatted_key" if open == Open::Clef && value == "true" => {
                 if let Some(clef) = out.last_mut().filter(|c| c.len() == 2) {
@@ -254,7 +263,7 @@ mod tests {
      bar                     9 (B_DIVISIO_MINOR_D3)
    type                      0 (GRE_SYLLABLE)
      type                    4 (GRE_CLEF)
-     clef                    c3
+     clef                    5 (c3)
      flatted_key             true
    type                      0 (GRE_SYLLABLE)
      type                    6 (GRE_CUSTOS)
