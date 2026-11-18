@@ -12,6 +12,7 @@ Found on 2026-11-18 with printpdf 0.12.9, azul-layout / azul-core / azul-css 0.0
 | E4 | Page images get LCD colour fringes, no way to choose | [azul#484](https://github.com/fschutt/azul/pull/484) | released: azul 0.0.18 |
 | E5 | Background of an absolutely positioned `<span>` not painted | [azul#484](https://github.com/fschutt/azul/pull/484) | released: azul 0.0.18 |
 | E6 | Inline SVG: `fill="currentColor"` draws nothing | [azul#485](https://github.com/fschutt/azul/issues/485) | open, not fixed yet |
+| E7 | `text-align: justify` spreads a line that ends with a forced break | fix written, on azul's branch `fix/input-bugs-2026-09-19` | not released yet |
 | | No public way to build a font from outlines | [allsorts-azul#3](https://github.com/fschutt/allsorts-azul/pull/3) | open for review |
 
 gabc-rs builds against the released crates, with no patches. With them, `spike/cases/svg-path-fill.html` and `spike/cases/text-ink-clip.html` render the same in the PDF and in the PNG. The sections below describe each finding and its cause.
@@ -104,3 +105,13 @@ Case: `spike/cases/svg-current-color.html`. Found on 2026-11-19 with printpdf 0.
 A path with `fill="currentColor"` in an inline `<svg>` is not painted, in the PDF and in the PNG; with `fill="#000000"` it is. The bows of ties and slurs are such paths.
 
 Not fixed yet; reported as https://github.com/fschutt/azul/issues/485. gabc-rs does not depend on it: the colour of the ink is a parameter (`html::score_in`, `render_in`), black where a PDF or PNG is made, and `currentColor` only where the page is shown by a browser.
+
+## E7. `text-align: justify` spreads a line that ends with a forced break
+
+Case: `spike/cases/justify-forced-break.html`. Found on 2026-11-19 with printpdf 0.12.11 and azul-layout 0.0.18, in the PDF of a hymn whose verses are written as lines with a break after each.
+
+In a justified paragraph, every line that ends with `<br>` was stretched to the full width, its words standing at the two ends. CSS Text 3 §6.3 aligns such a line by `text-align-last`, like the last line of the paragraph, and its `auto` turns `justify` into `start`.
+
+Cause: the line breaker resolves each line's own alignment correctly (`resolve_effective_alignment`, with the forced break taken into account), but the spacing for justification was decided from the paragraph's `text-align` and from "is this the paragraph's last line" alone (`position_one_line_between` in `layout/src/text3/cache/line_layout.rs`).
+
+Fix: a line is justified if its own resolved alignment says so. That also makes `text-align-last: justify` spread the last line, which it did not. Regression test `layout/tests/a_line_before_a_forced_break_is_not_justified.rs`.
