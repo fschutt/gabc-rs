@@ -10,6 +10,10 @@
 //! ```
 //!
 //! `html` is empty if the source has errors. The page frees both pieces of memory again.
+//!
+//! The module asks the page for one thing: `env.gabc_measure(pointer, length)`, the width of
+//! a piece of text in em in the font the page shows the lyrics in. So the layout works with
+//! the widths the browser draws, not with a guess.
 
 use gabc_rs::diagnostics::line_col;
 use gabc_rs::markdown::Language;
@@ -50,9 +54,33 @@ pub unsafe extern "C" fn gabc_render(language: u32, source: *const u8, len: usiz
     ((pointer as u64) << 32) | out_len as u64
 }
 
+#[cfg(target_arch = "wasm32")]
+extern "C" {
+    /// The width of the UTF-8 text at `pointer`, in em, measured by the page.
+    fn gabc_measure(pointer: *const u8, len: usize) -> f32;
+}
+
+/// The page's measure of a text, where there is a page.
+#[cfg(target_arch = "wasm32")]
+fn page_measure() -> Option<&'static dyn Fn(&str) -> f32> {
+    fn measure(text: &str) -> f32 {
+        unsafe { gabc_measure(text.as_ptr(), text.len()) }
+    }
+    Some(&measure)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn page_measure() -> Option<&'static dyn Fn(&str) -> f32> {
+    None
+}
+
 fn render(language: u32, source: &str, width: f32, size: f32) -> String {
     let language = if language == 1 { Language::Abc } else { Language::Gabc };
-    let options = gabc_rs::layout::Options { width: width.clamp(4.0, 60.0), lyric_size: size.clamp(0.2, 0.8), measure: None };
+    let options = gabc_rs::layout::Options {
+        width: width.clamp(4.0, 60.0),
+        lyric_size: size.clamp(0.2, 0.8),
+        measure: page_measure(),
+    };
     let diagnostics = match language {
         Language::Abc => abc::parse(source).diagnostics,
         Language::Gabc => gabc::parse(source).diagnostics,

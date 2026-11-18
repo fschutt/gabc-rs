@@ -248,7 +248,17 @@ new ResizeObserver(() => {
   if (width !== lastWidth) { lastWidth = width; soon(); }
 }).observe($("preview"));
 
-WebAssembly.instantiateStreaming(fetch("gabc_wasm.wasm"), {})
+// The module asks for the width of a text in em: measured on a canvas in the font the
+// preview shows the lyrics in, so that the layout uses the widths that are drawn.
+const ruler = document.createElement("canvas").getContext("2d");
+function measure(pointer, length) {
+  const text = new TextDecoder().decode(new Uint8Array(wasm.memory.buffer, pointer, length));
+  const style = getComputedStyle($("preview"));
+  ruler.font = `${style.fontStyle} ${style.fontWeight} 100px ${style.fontFamily}`;
+  return ruler.measureText(text).width / 100;
+}
+
+WebAssembly.instantiateStreaming(fetch("gabc_wasm.wasm"), { env: { gabc_measure: measure } })
   .then(({ instance }) => { wasm = instance.exports; return document.fonts.ready; })
   .then(() => load("chant"))
   .catch((error) => {
