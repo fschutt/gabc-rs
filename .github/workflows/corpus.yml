@@ -10,7 +10,7 @@ on:
     branches: [main]
     paths:
       - src/**
-      - xtask/src/corpus.rs
+      - xtask/**
       - .github/workflows/corpus.yml
 
 env:
