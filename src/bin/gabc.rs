@@ -1,5 +1,5 @@
 //! `gabc check [--summary] <file or directory>...`
-//! `gabc html <file.gabc or file.abc> [--width <em>] [--size <css size>] [--font <family>]`
+//! `gabc html <file.gabc or file.abc> [--width <em>] [--size <css size>] [--font <family>] [--font-file <ttf>]`
 //!
 //! Checks `.gabc` and `.abc` files and the notation blocks of `.md` files. Prints one line
 //! per problem as `path:line:col: error[E011]: message` and exits with 1 if any file has an
@@ -19,7 +19,7 @@ fn main() -> ExitCode {
         Some("html") => return html(&args.collect::<Vec<_>>()),
         _ => {
             eprintln!("usage: gabc check [--summary] <file or directory>...");
-            eprintln!("       gabc html <file.gabc or file.abc> [--width <em>] [--size <css size>] [--font <family>]");
+            eprintln!("       gabc html <file.gabc or file.abc> [--width <em>] [--size <css size>] [--font <family>] [--font-file <ttf>]");
             return ExitCode::from(2);
         }
     }
@@ -99,24 +99,53 @@ fn main() -> ExitCode {
 fn html(args: &[String]) -> ExitCode {
     let mut file = None;
     let (mut width, mut size, mut font) = (18.0f32, String::from("34px"), String::from("serif"));
+    let mut font_file: Option<String> = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--width" => width = args.next().and_then(|v| v.parse().ok()).unwrap_or(width),
             "--size" => size = args.next().cloned().unwrap_or(size),
             "--font" => font = args.next().cloned().unwrap_or(font),
+            "--font-file" => font_file = args.next().cloned(),
             path => file = Some(path.to_string()),
         }
     }
     let Some(file) = file else {
-        eprintln!("usage: gabc html <file.gabc or file.abc> [--width <em>] [--size <css size>] [--font <family>]");
+        eprintln!("usage: gabc html <file.gabc or file.abc> [--width <em>] [--size <css size>] [--font <family>] [--font-file <ttf>]");
         return ExitCode::from(2);
     };
     let Ok(text) = std::fs::read_to_string(&file) else {
         eprintln!("{file}: not readable as UTF-8");
         return ExitCode::from(2);
     };
-    let options = gabc_rs::layout::Options { width, ..Default::default() };
+    // The widths of the lyrics: measured in the font they will be set in, if its file is given.
+    #[cfg(feature = "measure")]
+    let font_measure = match &font_file {
+        Some(path) => match std::fs::read(path).ok().and_then(|bytes| gabc_rs::measure::FontMeasure::new(&bytes)) {
+            Some(font) => Some(font),
+            None => {
+                eprintln!("{path}: not a font that can be read");
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
+    #[cfg(feature = "measure")]
+    let measure = font_measure.as_ref().map(|font| move |text: &str| font.width(text));
+    #[cfg(feature = "measure")]
+    let measure: Option<&dyn Fn(&str) -> f32> = measure.as_ref().map(|f| f as &dyn Fn(&str) -> f32);
+    #[cfg(not(feature = "measure"))]
+    let measure: Option<&dyn Fn(&str) -> f32> = {
+        if font_file.is_some() {
+            eprintln!("gabc: --font-file needs a build with `--features measure`");
+            return ExitCode::from(2);
+        }
+        None
+    };
+    if measure.is_none() {
+        eprintln!("gabc: no --font-file given: the widths of the lyrics are estimated, not measured");
+    }
+    let options = gabc_rs::layout::Options { width, measure, ..Default::default() };
     let is_abc = file.ends_with(".abc");
     let (diagnostics, valid, engraving, title) = if is_abc {
         let parsed = abc::parse(&text);

@@ -16,6 +16,8 @@ pub mod glyphs;
 pub mod html;
 pub mod layout;
 pub mod markdown;
+#[cfg(feature = "measure")]
+pub mod measure;
 pub mod music_glyphs;
 pub mod neume;
 
