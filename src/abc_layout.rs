@@ -9,6 +9,15 @@
 //! Heights are staff steps above middle C: the lines of the staff are 2, 4, 6, 8 and 10
 //! (E G B d f). Lengths are in em, one em being four staff spaces, as in [`crate::layout`].
 //!
+//! Where the numbers come from. Weights and attachment points are the music font's own
+//! ([`crate::music_glyphs::engraving`], the anchors of the note heads and flags). The places
+//! of the key signature's sharps and flats and of the numbers of the time signature, the
+//! direction of stems and the height of rests are the common rules of notation. What neither
+//! gives is a choice of this crate and can be told by its plain numbers in the code: how much
+//! room a note gets for its length ([`room`]), the gaps beside accidentals, dots, clef and
+//! bars, how high a bow arches, where the breath mark and the fermata sit, and the room
+//! between words.
+//!
 //! Short notes written without a space between them share a beam, which is drawn level.
 //! Ties and slurs are bows from note to note; one that would cross a line end is left out.
 //!
