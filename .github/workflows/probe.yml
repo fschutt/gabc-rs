@@ -1,0 +1,49 @@
+name: Probe
+
+# Asks Gregorio about small pieces of GABC: each probe is a body (one per line of the
+# input), run with a minimal header. Prints what Gregorio says and its structural dump.
+# This is how questions about the format are settled: from output, not from source.
+
+on:
+  workflow_dispatch:
+    inputs:
+      probes:
+        description: GABC bodies, one probe per line
+        required: true
+      header:
+        description: Extra header lines for every probe
+        required: false
+        default: ""
+      output:
+        description: What to print for accepted probes (dump, gtex, none)
+        required: false
+        default: dump
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Gregorio
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends gregorio
+          gregorio --version | head -1
+      - name: Ask
+        env:
+          PROBES: ${{ inputs.probes }}
+          HEADER: ${{ inputs.header }}
+          OUTPUT: ${{ inputs.output }}
+        run: |
+          n=0
+          printf '%s\n' "$PROBES" | while IFS= read -r body; do
+            [ -z "$body" ] && continue
+            n=$((n + 1))
+            { printf 'name: probe;\n'; [ -n "$HEADER" ] && printf '%s\n' "$HEADER"; printf '%%%%\n%s\n' "$body"; } > "probe$n.gabc"
+            echo "=== PROBE $n: $body"
+            if gregorio -S "probe$n.gabc" > "probe$n.gtex" 2> "probe$n.err"; then echo "exit: 0"; else echo "exit: $?"; fi
+            sed 's/^/stderr: /' "probe$n.err"
+            case "$OUTPUT" in
+              dump) gregorio -F dump -S "probe$n.gabc" 2>/dev/null | sed 's/^/dump: /' ;;
+              gtex) sed 's/^/gtex: /' "probe$n.gtex" ;;
+            esac
+          done
