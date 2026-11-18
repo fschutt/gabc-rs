@@ -69,7 +69,7 @@ const GLYPHS: &[(char, &str)] = &[
     ('\u{E023}', "Virgula"),
 ];
 
-const USAGE: &str = "usage: cargo run -p xtask -- font | corpus gregobase [--oracle <program>]";
+const USAGE: &str = "usage: cargo run -p xtask -- font | corpus gregobase [--oracle <program> | --verdicts <file.tsv>]";
 
 fn main() -> ExitCode {
     let task = std::env::args().nth(1).unwrap_or_default();
@@ -78,8 +78,13 @@ fn main() -> ExitCode {
         "corpus" if std::env::args().nth(2).as_deref() == Some("gregobase") => {
             let args: Vec<String> = std::env::args().skip(3).collect();
             match args.as_slice() {
-                [] => corpus::gregobase(&repo_root(), None),
-                [flag, program] if flag == "--oracle" => corpus::gregobase(&repo_root(), Some(program)),
+                [] => corpus::gregobase(&repo_root(), corpus::Oracle::None),
+                [flag, program] if flag == "--oracle" => {
+                    corpus::gregobase(&repo_root(), corpus::Oracle::Program(program))
+                }
+                [flag, file] if flag == "--verdicts" => {
+                    corpus::gregobase(&repo_root(), corpus::Oracle::Saved(Path::new(file)))
+                }
                 _ => Err(String::from(USAGE)),
             }
         }

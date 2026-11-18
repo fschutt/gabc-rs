@@ -9,6 +9,8 @@
 //! With `--oracle <program>` every file is also given to that program, which is Gregorio
 //! where it is installed (CI). Gregorio is run and never read: what it accepts and rejects is
 //! the reference our verdicts are compared with, and the report lists the disagreements.
+//! `--verdicts <file.tsv>` takes the oracle's verdicts from the `gregobase-verdicts.tsv` of an
+//! earlier run instead, for working on the parser where Gregorio is not installed.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -21,7 +23,16 @@ const DUMP_URL: &str =
     "https://raw.githubusercontent.com/gregorio-project/GregoBase/HEAD/gregobase_online.sql";
 const TABLE: &str = "INSERT INTO `gregobase_chants`";
 
-pub fn gregobase(root: &Path, oracle: Option<&str>) -> Result<(), String> {
+/// Where the reference verdicts come from.
+pub enum Oracle<'a> {
+    None,
+    /// A program to run on every file.
+    Program(&'a str),
+    /// The verdicts file of an earlier run.
+    Saved(&'a Path),
+}
+
+pub fn gregobase(root: &Path, oracle: Oracle) -> Result<(), String> {
     let dir = root.join("target/corpus");
     let dump = dir.join("gregobase_online.sql");
     let out = dir.join("gregobase");
@@ -40,7 +51,7 @@ pub fn gregobase(root: &Path, oracle: Option<&str>) -> Result<(), String> {
     }
     let sql = std::fs::read_to_string(&dump).map_err(|e| format!("{}: {e}", dump.display()))?;
 
-    let mut report = Report { with_oracle: oracle.is_some(), ..Report::default() };
+    let mut report = Report { with_oracle: !matches!(oracle, Oracle::None), ..Report::default() };
     let mut files = Vec::new();
     for row in rows(&sql)? {
         let Some(score) = score_file(&row) else {
@@ -51,12 +62,16 @@ pub fn gregobase(root: &Path, oracle: Option<&str>) -> Result<(), String> {
         std::fs::write(&path, &score.source).map_err(|e| format!("{}: {e}", path.display()))?;
         files.push((row.id, path, score));
     }
-    let verdicts = match oracle {
-        Some(program) => ask_oracle(program, &files)?,
-        None => Vec::new(),
+    let verdicts: Vec<Option<OracleVerdict>> = match oracle {
+        Oracle::Program(program) => ask_oracle(program, &files)?.into_iter().map(Some).collect(),
+        Oracle::Saved(path) => {
+            let saved = saved_verdicts(path)?;
+            files.iter().map(|(id, _, _)| saved.get(id).cloned()).collect()
+        }
+        Oracle::None => Vec::new(),
     };
     for (n, (id, _, score)) in files.iter().enumerate() {
-        report.add(*id, score, verdicts.get(n).cloned());
+        report.add(*id, score, verdicts.get(n).cloned().flatten());
     }
 
     let text = report.render();
@@ -75,6 +90,22 @@ struct OracleVerdict {
     accepted: bool,
     /// Its first line of messages, if it had any.
     message: String,
+}
+
+/// Reads the `id`, `oracle` and `oracle_message` columns of a verdicts file.
+fn saved_verdicts(path: &Path) -> Result<BTreeMap<u32, OracleVerdict>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut out = BTreeMap::new();
+    for line in text.lines().skip(1) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        if let (Some(id), Some(verdict)) = (fields.first().and_then(|f| f.parse().ok()), fields.get(3)) {
+            if !verdict.is_empty() {
+                let message = fields.get(4).copied().unwrap_or("").to_string();
+                out.insert(id, OracleVerdict { accepted: *verdict == "accept", message });
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Runs `program -S <file>` on every file, on all cores. The program is expected to write

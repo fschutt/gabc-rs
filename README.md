@@ -15,7 +15,7 @@ Gregorian chant notation (GABC) and metered hymns (ABC) rendered through one HTM
 
 `cargo run -p xtask -- corpus gregobase` downloads the [GregoBase](https://gregobase.selapa.net) database (about 18,700 scores, transcriptions under CC0) into `target/corpus`, checks every score and writes a report. With `--oracle gregorio` each score is also given to an installed Gregorio, and the report lists where its verdict and ours differ. The `Corpus` workflow does this on every change to the parser.
 
-Gregorio is only ever run, as a program. Questions about the format are settled from its public description and from what the program outputs, never from its source.
+Gregorio is only ever run, as a program. Questions about the format are settled from its public description and from what the program outputs, never from its source. `docs/gabc-observed.md` lists what was observed, and the `Probe` workflow asks it about a piece of GABC. On the GregoBase library the two parsers reach the same verdict for 99.89% of the scores.
 
 ## How it is meant to work
 
