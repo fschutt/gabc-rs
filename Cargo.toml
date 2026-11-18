@@ -18,11 +18,3 @@ debug = false
 
 [profile.dev.package."*"]
 opt-level = 1
-
-# Engine fixes that are not released yet (docs/engine-bugs.md), pinned by revision:
-# fschutt/azul#484 and fschutt/printpdf#299 (which contains #298).
-[patch.crates-io]
-printpdf = { git = "https://github.com/fschutt/printpdf", rev = "18d02d42ac05408dde1c605f1aecc80290f879f7" }
-azul-css = { git = "https://github.com/fschutt/azul", rev = "858b5e46f171cfc1c42bce2fbec87b88a4a3f1d6" }
-azul-core = { git = "https://github.com/fschutt/azul", rev = "858b5e46f171cfc1c42bce2fbec87b88a4a3f1d6" }
-azul-layout = { git = "https://github.com/fschutt/azul", rev = "858b5e46f171cfc1c42bce2fbec87b88a4a3f1d6" }

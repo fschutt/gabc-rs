@@ -6,14 +6,14 @@ Found on 2026-11-18 with printpdf 0.12.9, azul-layout / azul-core / azul-css 0.0
 
 | # | Finding | Fix | State |
 |---|---|---|---|
-| E1 | SVG paths in a PDF: fills print as boxes, strokes are missing | strokes: [printpdf#298](https://github.com/fschutt/printpdf/pull/298); fills: [azul#484](https://github.com/fschutt/azul/pull/484) and printpdf branch `fix/svg-fills-in-pdf` | open for review |
-| E2 | PNG: text ink cut at its line box | [azul#484](https://github.com/fschutt/azul/pull/484) | open for review |
-| E3 | A line without text reports an unresolved font | [azul#484](https://github.com/fschutt/azul/pull/484) | open for review |
-| E4 | Page images get LCD colour fringes, no way to choose | [azul#484](https://github.com/fschutt/azul/pull/484) | open for review |
-| E5 | Background of an absolutely positioned `<span>` not painted | [azul#484](https://github.com/fschutt/azul/pull/484) | open for review |
+| E1 | SVG paths in a PDF: fills print as boxes, strokes are missing | strokes: [printpdf#298](https://github.com/fschutt/printpdf/pull/298); fills: [azul#484](https://github.com/fschutt/azul/pull/484) and [printpdf#299](https://github.com/fschutt/printpdf/pull/299) | released: azul 0.0.18, printpdf 0.12.10 |
+| E2 | PNG: text ink cut at its line box | [azul#484](https://github.com/fschutt/azul/pull/484) | released: azul 0.0.18 |
+| E3 | A line without text reports an unresolved font | [azul#484](https://github.com/fschutt/azul/pull/484) | released: azul 0.0.18 |
+| E4 | Page images get LCD colour fringes, no way to choose | [azul#484](https://github.com/fschutt/azul/pull/484) | released: azul 0.0.18 |
+| E5 | Background of an absolutely positioned `<span>` not painted | [azul#484](https://github.com/fschutt/azul/pull/484) | released: azul 0.0.18 |
 | | No public way to build a font from outlines | [allsorts-azul#3](https://github.com/fschutt/allsorts-azul/pull/3) | open for review |
 
-`Cargo.toml` patches the engines to these branches, pinned by revision. With them, `spike/cases/svg-path-fill.html` and `spike/cases/text-ink-clip.html` render the same in the PDF and in the PNG. The sections below describe each finding as it was found.
+gabc-rs builds against the released crates, with no patches. With them, `spike/cases/svg-path-fill.html` and `spike/cases/text-ink-clip.html` render the same in the PDF and in the PNG. The sections below describe each finding and its cause.
 
 How to reproduce any case:
 
@@ -50,11 +50,11 @@ The two halves need different fixes.
 
 **Strokes: printpdf only.** `StrokedPath` already carries the geometry (`path`, `view_box`, `bounds`), colour, width and `StrokeOutline` (caps, joins, miter limit, dashes). The bridge only has to write it. Done on printpdf branch `fix/svg-paths-in-pdf`: a `StrokedPath` arm, `SvgToPage` (the same view-box mapping as azul's `svg_user_space_mapping`), `svg_path_to_lines`, and three unit tests.
 
-**Fills: azul and printpdf.** A fill is "paint a rectangle (or gradient) under a mask clip", and `PushImageMaskClip { bounds, mask_image, mask_rect }` has no geometry. Proposal, for review before I write it:
+**Fills: azul and printpdf.** A fill is "paint a rectangle (or gradient) under a mask clip", and `PushImageMaskClip { bounds, mask_image, mask_rect }` has no geometry. What was done:
 
 - Add `geometry: Option<MaskGeometry>` to `PushImageMaskClip`, with `MaskGeometry { path: SvgMultiPolygon, view_box: Option<(f32, f32, f32, f32)>, even_odd: bool }`, set where the mask is rasterised from an `SvgNodeData::Path` and `None` for a real image mask. About ten sites in azul name the variant's fields.
 - In printpdf, `PushImageMaskClip` with geometry becomes `q` plus a clip path (`W` or `W*`), and `PopImageMaskClip` becomes `Q`, exactly as `PushClip`/`PopClip` are handled today. Whatever is painted under it (colour, gradient) is then clipped by the real path.
-- Open point: the `SvgNodeData::Path` arm of `push_image_mask_clip` only exists with the `cpurender` feature. printpdf's `html` feature does not enable it, so a build that only makes PDFs emits no clip at all for an SVG fill. The item needs to be emitted without a rasteriser too. `StrokedPath` solves the same problem with `mask: Option<ImageRef>`; for the clip either `mask_image` becomes optional, or the no-rasteriser arm passes a null image. That choice changes what GPU consumers see, so it is the engine owner's.
+- The `SvgNodeData::Path` arm of `push_image_mask_clip` only existed with the `cpurender` feature, which printpdf's `html` feature does not enable, so a build that only makes PDFs emitted no clip at all for an SVG fill. `mask_image` is now optional and the item is emitted without a rasteriser too.
 - A real image mask (`SvgNodeData::ImageClipMask`) needs a PDF soft mask. Separate and smaller; nothing in gabc-rs uses it.
 
 ## E2. PNG: text ink is clipped to its line box
@@ -69,9 +69,8 @@ Cause: `DisplayListItem::Text.clip_rect` does two jobs.
 - The reason is in `layout/src/solver3/page_breaks.rs`: `atomic_lines` and the widows/orphans grouping read the same `clip_rect` as the line box that must not be split (azul#478).
 - cpurender (`text_run_clip` in `layout/src/cpurender/raster.rs`) clips the ink to it. printpdf ignores it, which is why the PDF is right.
 
-Proposed fix, for review before I write it: give the text item one rectangle per job, the line box for pagination and a paint clip that, on a visible axis, does not cut ink (the vertical counterpart of the one-em horizontal allowance that is already there). The `Text` variant is built or matched without `..` in about 33 places in azul and in one in printpdf, so this is a mechanical but wide change, and it touches the code azul#478 fixed. Loosening the shared rectangle instead would make the avoid-ranges of neighbouring lines overlap again, which is what #478 was.
+Fix: the text item has one rectangle per job: `line_box` for pagination, and `clip_rect` as a paint clip that, on a visible axis, does not cut ink (the vertical counterpart of the one-em horizontal allowance that was already there). Loosening the shared rectangle instead would have made the avoid-ranges of neighbouring lines overlap again, which is what azul#478 was.
 
-## E3. Every `<svg>` element produces a text run without a font
 
 ## E3. A line without text reports an unresolved font
 
