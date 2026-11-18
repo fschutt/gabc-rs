@@ -8,6 +8,8 @@
 pub mod abc;
 pub mod diagnostics;
 pub mod gabc;
+pub mod glyphs;
 pub mod markdown;
+pub mod neume;
 
 pub use diagnostics::{Diagnostic, Severity, Span};
