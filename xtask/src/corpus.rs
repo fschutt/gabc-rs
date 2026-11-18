@@ -267,6 +267,57 @@ fn has_nabc(body: &str) -> bool {
     false
 }
 
+/// What drawing a score gave.
+enum Drawn {
+    /// Lines, and all of them right.
+    Fine,
+    /// The layout code panicked.
+    Panicked,
+    /// The number of note heads drawn is not the number in the score.
+    NotesLost { in_score: usize, drawn: usize },
+    /// Something lies beyond the right end of its line.
+    TooWide,
+}
+
+/// Lays the score out at a common width and checks what comes back: every note head is
+/// drawn once, and nothing lies beyond the end of its line.
+fn draw(score: &gabc::Score) -> Drawn {
+    use gabc_rs::glyphs::Glyph;
+    let width = 18.0;
+    let options = gabc_rs::layout::Options { width, ..Default::default() };
+    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gabc_rs::layout::engrave(score, &options)));
+    let Ok(engraving) = attempt else {
+        return Drawn::Panicked;
+    };
+    // The glyphs that stand for a note head. A porrectus stroke stands for two.
+    let heads = |glyph: Glyph| match glyph {
+        Glyph::Porrectus1 | Glyph::Porrectus2 | Glyph::Porrectus3 | Glyph::Porrectus4 => 2,
+        Glyph::DoClef | Glyph::FaClef | Glyph::Flat | Glyph::Natural | Glyph::Mora | Glyph::Virgula => 0,
+        Glyph::CustosLong | Glyph::CustosShort | Glyph::CustosDescLong | Glyph::CustosDescShort => 0,
+        Glyph::VerticalEpisemaAbove | Glyph::VerticalEpisemaBelow | Glyph::AcuteAccent => 0,
+        _ => 1,
+    };
+    let drawn: usize = engraving.lines.iter().flat_map(|l| &l.glyphs).map(|g| heads(g.glyph)).sum();
+    let in_score: usize = score
+        .syllables
+        .iter()
+        .filter_map(|s| s.notes.as_ref())
+        .flat_map(|g| g.elements.iter().enumerate())
+        .filter_map(|(k, e)| if let gabc::ElementKind::Note(n) = &e.kind { Some(gabc_rs::neume::heads(n, k).len()) } else { None })
+        .sum();
+    if drawn != in_score {
+        return Drawn::NotesLost { in_score, drawn };
+    }
+    let too_wide = engraving
+        .lines
+        .iter()
+        .any(|l| l.glyphs.iter().any(|g| g.x + g.glyph.metrics().width > width + 0.01));
+    if too_wide {
+        return Drawn::TooWide;
+    }
+    Drawn::Fine
+}
+
 /// One score's result.
 struct Outcome {
     id: u32,
@@ -275,6 +326,8 @@ struct Outcome {
     degraded: bool,
     /// What we read, as a line of tokens, if we accept the score.
     structure: Option<String>,
+    /// How drawing the score went, if we accept it.
+    drawn: Option<Drawn>,
     oracle: Option<OracleVerdict>,
 }
 
@@ -313,6 +366,7 @@ impl Report {
             id,
             degraded: error.is_none() && (score.dropped_tex || !parsed.diagnostics.is_empty()),
             structure: error.is_none().then(|| structure::ours(&parsed.score)),
+            drawn: error.is_none().then(|| draw(&parsed.score)),
             error,
             oracle,
         });
@@ -442,6 +496,30 @@ impl Report {
                     list.iter().take(4).map(|(id, tokens)| format!("{id}: {}", tokens.replace('|', "\\|"))).collect();
                 let _ = writeln!(s, "| {} | {} | {} |", cause.replace('|', "\\|"), list.len(), examples.join(", "));
             }
+        }
+
+        // Drawing: what the layout makes of every score we accept.
+        let accepted: Vec<&Outcome> = self.outcomes.iter().filter(|o| o.drawn.is_some()).collect();
+        if !accepted.is_empty() {
+            let ids = |f: &dyn Fn(&Drawn) -> bool| -> Vec<u32> {
+                accepted.iter().filter(|o| o.drawn.as_ref().is_some_and(f)).map(|o| o.id).collect()
+            };
+            let fine = ids(&|d| matches!(d, Drawn::Fine)).len();
+            let list = |ids: &[u32]| ids.iter().take(8).map(u32::to_string).collect::<Vec<_>>().join(", ");
+            let _ = writeln!(s, "\n## Drawing\n");
+            let _ = writeln!(
+                s,
+                "Every score we accept is laid out at a width of 18 em. {fine} of {} come out with every note head drawn once and nothing beyond the end of a line ({:.2}%).\n",
+                accepted.len(),
+                100.0 * fine as f64 / accepted.len() as f64
+            );
+            let _ = writeln!(s, "| what went wrong | scores | examples |\n|---|---:|---|");
+            let panicked = ids(&|d| matches!(d, Drawn::Panicked));
+            let lost = ids(&|d| matches!(d, Drawn::NotesLost { .. }));
+            let wide = ids(&|d| matches!(d, Drawn::TooWide));
+            let _ = writeln!(s, "| the layout panicked | {} | {} |", panicked.len(), list(&panicked));
+            let _ = writeln!(s, "| note heads lost or doubled | {} | {} |", lost.len(), list(&lost));
+            let _ = writeln!(s, "| something beyond the end of a line | {} | {} |", wide.len(), list(&wide));
         }
 
         let _ = writeln!(s, "\n## Scores we reject\n");
