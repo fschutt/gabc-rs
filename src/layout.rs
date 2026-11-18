@@ -838,6 +838,20 @@ fn special(code: &str) -> &str {
     }
 }
 
+/// A syllable's text as it is printed, and the part of it that stands under the middle of
+/// the first note: the part written in `{...}`, or what [`vowel_segment`] finds. For checking
+/// the centring against a reference.
+pub fn centred_part(raw: &str) -> (String, String) {
+    let (spans, forced) = Styles::default().read(raw);
+    let plain: String = spans.iter().map(|s| s.text.as_str()).collect();
+    let centre = forced
+        .or_else(|| vowel_segment(&plain))
+        .and_then(|(start, len)| plain.get(start..start + len))
+        .unwrap_or("")
+        .to_string();
+    (plain, centre)
+}
+
 /// The letters of a syllable that stand under the middle of its first note, as where they
 /// start in the text and how many bytes they are.
 ///

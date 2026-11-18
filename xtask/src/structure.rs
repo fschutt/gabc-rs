@@ -199,6 +199,76 @@ fn bar_token(name: &str) -> String {
     token.to_string()
 }
 
+/// The text of every syllable in Gregorio's dump with the letters it centres under the first
+/// note (those between the start and the end of the style `ST_CENTER`). A syllable without
+/// text is left out.
+pub fn centres_from_dump(dump: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut text = String::new();
+    let mut centre = String::new();
+    let mut centring = false;
+    // Verbatim TeX and what Gregorio adds for punctuation are not the syllable's letters.
+    let mut skipping = 0usize;
+    let mut in_score = false;
+    let flush = |text: &mut String, centre: &mut String, out: &mut Vec<(String, String)>| {
+        if !text.is_empty() {
+            out.push((std::mem::take(text), std::mem::take(centre)));
+        }
+        centre.clear();
+    };
+    for line in dump.lines() {
+        let line = line.trim_start();
+        if line.trim() == "SCORE" {
+            in_score = true;
+            continue;
+        }
+        if !in_score {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("type") {
+            if rest.contains("GRE_SYLLABLE") {
+                flush(&mut text, &mut centre, &mut out);
+                centring = false;
+                skipping = 0;
+            }
+        } else if let Some(rest) = line.strip_prefix("beginning of style") {
+            match rest.trim() {
+                "ST_CENTER" | "ST_FORCED_CENTER" => centring = true,
+                "ST_VERBATIM" | "ST_PROTRUSION_FACTOR" => skipping += 1,
+                _ => {}
+            }
+        } else if let Some(rest) = line.strip_prefix("end of style") {
+            match rest.trim() {
+                "ST_CENTER" | "ST_FORCED_CENTER" => centring = false,
+                "ST_VERBATIM" | "ST_PROTRUSION_FACTOR" => skipping = skipping.saturating_sub(1),
+                _ => {}
+            }
+        } else if let Some(rest) = line.strip_prefix("character") {
+            if skipping == 0 {
+                // The character stands after the padding; a space leaves nothing there.
+                let c = rest.trim();
+                let c = if c.is_empty() { " " } else { c };
+                text.push_str(c);
+                if centring {
+                    centre.push_str(c);
+                }
+            }
+        }
+    }
+    flush(&mut text, &mut centre, &mut out);
+    out
+}
+
+/// The same from our parse: every syllable with text, and the letters we centre.
+pub fn centres(score: &Score) -> Vec<(String, String)> {
+    score
+        .syllables
+        .iter()
+        .map(|syllable| gabc_rs::layout::centred_part(&syllable.text))
+        .filter(|(text, _)| !text.is_empty())
+        .collect()
+}
+
 /// Where two token lines part, as a cause that scores can be grouped by, with the two
 /// tokens. `None` if the lines are equal.
 pub fn difference(ours: &str, theirs: &str) -> Option<(String, String)> {
@@ -281,6 +351,39 @@ mod tests {
         assert!(parsed.is_valid(), "{:?}", parsed.diagnostics);
         assert_eq!(ours(&parsed.score), theirs);
         assert_eq!(difference(&theirs, &theirs), None);
+    }
+
+    #[test]
+    fn the_centred_letters_are_read_from_a_dump() {
+        let dump = "\
+ SCORE
+   type                      0 (GRE_SYLLABLE)
+     character                 q
+     character                 u
+     beginning of style          ST_CENTER
+     character                 o
+     end of style                ST_CENTER
+     type                    3 (GRE_ELEMENT)
+   type                      0 (GRE_SYLLABLE)
+     type                    7 (GRE_BAR)
+   type                      0 (GRE_SYLLABLE)
+     beginning of style          ST_CENTER
+     character                 P
+     character                 s
+     beginning of style        ST_PROTRUSION_FACTOR
+     beginning of style        ST_VERBATIM
+     character                 x
+     end of style              ST_VERBATIM
+     end of style              ST_PROTRUSION_FACTOR
+     end of style                ST_CENTER
+     character                 .
+";
+        assert_eq!(
+            centres_from_dump(dump),
+            [("quo".to_string(), "o".to_string()), ("Ps.".to_string(), "Ps".to_string())]
+        );
+        let parsed = gabc_rs::gabc::parse("%%\n(c4) quo(f) (;) Ps.(g)");
+        assert_eq!(centres(&parsed.score), centres_from_dump(dump));
     }
 
     #[test]

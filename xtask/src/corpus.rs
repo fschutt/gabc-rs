@@ -98,6 +98,8 @@ struct OracleVerdict {
     message: String,
     /// What it read, as a line of tokens (see [`crate::structure`]), if it accepted the file.
     structure: Option<String>,
+    /// The text of each syllable and the letters it centres under the first note.
+    centres: Option<Vec<(String, String)>>,
 }
 
 /// Reads the `id`, `oracle` and `oracle_message` columns of a verdicts file.
@@ -109,7 +111,7 @@ fn saved_verdicts(path: &Path) -> Result<BTreeMap<u32, OracleVerdict>, String> {
         if let (Some(id), Some(verdict)) = (fields.first().and_then(|f| f.parse().ok()), fields.get(3)) {
             if !verdict.is_empty() {
                 let message = fields.get(4).copied().unwrap_or("").to_string();
-                out.insert(id, OracleVerdict { accepted: *verdict == "accept", message, structure: None });
+                out.insert(id, OracleVerdict { accepted: *verdict == "accept", message, structure: None, centres: None });
             }
         }
     }
@@ -157,16 +159,19 @@ fn ask_oracle(program: &str, files: &[(u32, PathBuf, ScoreFile)]) -> Result<Vec<
                                         .to_string();
                                     let accepted = out.status.success() && !messages.contains("error");
                                     // What it read, from its structural dump.
-                                    let structure = accepted
+                                    let dump = accepted
                                         .then(|| Command::new(program).args(["-F", "dump", "-S"]).arg(path).output().ok())
                                         .flatten()
-                                        .map(|dump| structure::from_dump(&String::from_utf8_lossy(&dump.stdout)));
-                                    OracleVerdict { accepted, message: line, structure }
+                                        .map(|dump| String::from_utf8_lossy(&dump.stdout).into_owned());
+                                    let structure = dump.as_deref().map(structure::from_dump);
+                                    let centres = dump.as_deref().map(structure::centres_from_dump);
+                                    OracleVerdict { accepted, message: line, structure, centres }
                                 }
                                 Err(e) => OracleVerdict {
                                     accepted: false,
                                     message: format!("did not run: {e}"),
                                     structure: None,
+                                    centres: None,
                                 },
                             }
                         })
@@ -274,7 +279,7 @@ enum Drawn {
     /// The layout code panicked.
     Panicked,
     /// The number of note heads drawn is not the number in the score.
-    NotesLost { in_score: usize, drawn: usize },
+    NotesLost,
     /// Something lies beyond the right end of its line.
     TooWide,
 }
@@ -306,7 +311,7 @@ fn draw(score: &gabc::Score) -> Drawn {
         .filter_map(|(k, e)| if let gabc::ElementKind::Note(n) = &e.kind { Some(gabc_rs::neume::heads(n, k).len()) } else { None })
         .sum();
     if drawn != in_score {
-        return Drawn::NotesLost { in_score, drawn };
+        return Drawn::NotesLost;
     }
     let too_wide = engraving
         .lines
@@ -328,6 +333,8 @@ struct Outcome {
     structure: Option<String>,
     /// How drawing the score went, if we accept it.
     drawn: Option<Drawn>,
+    /// The text of each syllable and the letters we centre, if we accept it.
+    centres: Option<Vec<(String, String)>>,
     oracle: Option<OracleVerdict>,
 }
 
@@ -367,6 +374,7 @@ impl Report {
             degraded: error.is_none() && (score.dropped_tex || !parsed.diagnostics.is_empty()),
             structure: error.is_none().then(|| structure::ours(&parsed.score)),
             drawn: error.is_none().then(|| draw(&parsed.score)),
+            centres: error.is_none().then(|| structure::centres(&parsed.score)),
             error,
             oracle,
         });
@@ -498,6 +506,48 @@ impl Report {
             }
         }
 
+        // Centring: which letters of each syllable stand under its first note.
+        let (mut scores, mut same_text, mut syllables, mut agree) = (0usize, 0usize, 0usize, 0usize);
+        let mut differ: BTreeMap<(String, String, String), (usize, u32)> = BTreeMap::new();
+        for o in &self.outcomes {
+            let theirs = o.oracle.as_ref().and_then(|v| v.centres.as_ref());
+            let (Some(ours), Some(theirs)) = (&o.centres, theirs) else { continue };
+            scores += 1;
+            // Only where both read the same syllables is there something to compare.
+            if ours.len() != theirs.len() || ours.iter().zip(theirs).any(|(a, b)| a.0 != b.0) {
+                continue;
+            }
+            same_text += 1;
+            for (a, b) in ours.iter().zip(theirs) {
+                // Gregorio centres nothing in the syllable of the initial.
+                if b.1.is_empty() {
+                    continue;
+                }
+                syllables += 1;
+                if a.1 == b.1 {
+                    agree += 1;
+                } else {
+                    let entry = differ.entry((a.0.clone(), a.1.clone(), b.1.clone())).or_insert((0, o.id));
+                    entry.0 += 1;
+                }
+            }
+        }
+        if scores > 0 {
+            let _ = writeln!(s, "\n### The letters under the first note\n");
+            let _ = writeln!(
+                s,
+                "In {same_text} of {scores} scores both read the same text for every syllable. Of their {syllables} syllables, {agree} have the same letters centred ({:.3}%).\n",
+                100.0 * agree as f64 / syllables.max(1) as f64
+            );
+            let _ = writeln!(s, "| syllable | we centre | Gregorio centres | times | first in |\n|---|---|---|---:|---:|");
+            let mut rows: Vec<_> = differ.iter().collect();
+            rows.sort_by_key(|(_, (times, _))| std::cmp::Reverse(*times));
+            for ((text, ours, theirs), (times, id)) in rows.iter().take(40) {
+                let cell = |t: &str| t.replace('|', "\\|").replace('`', "'");
+                let _ = writeln!(s, "| `{}` | `{}` | `{}` | {times} | {id} |", cell(text), cell(ours), cell(theirs));
+            }
+        }
+
         // Drawing: what the layout makes of every score we accept.
         let accepted: Vec<&Outcome> = self.outcomes.iter().filter(|o| o.drawn.is_some()).collect();
         if !accepted.is_empty() {
@@ -515,7 +565,7 @@ impl Report {
             );
             let _ = writeln!(s, "| what went wrong | scores | examples |\n|---|---:|---|");
             let panicked = ids(&|d| matches!(d, Drawn::Panicked));
-            let lost = ids(&|d| matches!(d, Drawn::NotesLost { .. }));
+            let lost = ids(&|d| matches!(d, Drawn::NotesLost));
             let wide = ids(&|d| matches!(d, Drawn::TooWide));
             let _ = writeln!(s, "| the layout panicked | {} | {} |", panicked.len(), list(&panicked));
             let _ = writeln!(s, "| note heads lost or doubled | {} | {} |", lost.len(), list(&lost));
@@ -725,7 +775,12 @@ mod tests {
     fn disagreements_with_the_oracle_are_listed_by_cause() {
         let score = |source: &str| ScoreFile { source: source.to_string(), dropped_tex: false };
         let said = |accepted, message: &str| {
-            Some(OracleVerdict { accepted, message: message.to_string(), structure: accepted.then(|| String::from("c4 fv")) })
+            Some(OracleVerdict {
+                accepted,
+                message: message.to_string(),
+                structure: accepted.then(|| String::from("c4 fv")),
+                centres: accepted.then(|| vec![(String::from("A"), String::from("A"))]),
+            })
         };
         let mut report = Report { with_oracle: true, ..Report::default() };
         report.add(1, &score("%%\n(c4) A(f)"), said(true, ""));
