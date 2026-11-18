@@ -90,6 +90,11 @@ pub enum ElementKind {
     Join,
     /// `@`: fusion or a change of stem, depending on where it stands.
     At,
+    /// `{`: the notes up to [`ElementKind::VoiceEnd`] are a second voice. They are drawn at
+    /// the place of the notes that follow and take no room of their own.
+    VoiceStart,
+    /// `}`
+    VoiceEnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,6 +234,7 @@ pub fn parse(src: &str) -> Parsed {
         out: Parsed::default(),
         tex_warned: false,
         nabc_warned: false,
+        open_tags: Vec::new(),
     };
     let body_start = p.header();
     p.body(body_start);
@@ -240,6 +246,16 @@ struct Parser<'a> {
     out: Parsed,
     tex_warned: bool,
     nabc_warned: bool,
+    /// The text tags that are open, with where each was opened. A tag may stay open over
+    /// several syllables (`<i>` over a whole rubric), so this outlives one syllable's text.
+    open_tags: Vec<(&'static str, Span)>,
+}
+
+/// The note that a sign after one or more attributes belongs to: the last element that is
+/// not an attribute, if it is a note and at least one attribute follows it.
+fn sign_target(out: &[Element]) -> Option<usize> {
+    let last = out.iter().rposition(|e| !matches!(e.kind, ElementKind::Attribute { .. }))?;
+    (last + 1 < out.len() && matches!(out[last].kind, ElementKind::Note(_))).then_some(last)
 }
 
 fn pitch_of(c: char) -> Option<u8> {
@@ -379,17 +395,20 @@ impl<'a> Parser<'a> {
         let mut pending_space = true; // the first syllable starts a word
         let mut seen_clef = false;
         let mut seen_note = false;
+        // Inside `<v>...</v>` everything is TeX: a `(` there starts no notes and a `%` no
+        // comment.
+        let mut verbatim = false;
 
         while i < bytes.len() {
             let c = bytes[i];
             match c {
-                b'%' => {
+                b'%' if !verbatim => {
                     // A comment runs to the end of the line.
                     while i < bytes.len() && bytes[i] != b'\n' {
                         i += 1;
                     }
                 }
-                b'(' => {
+                b'(' if !verbatim => {
                     let open = i;
                     // The group ends at the next `)` that is not inside `[...]`.
                     let mut depth = 0usize;
@@ -450,6 +469,13 @@ impl<'a> Parser<'a> {
                     text_start = i;
                 }
                 _ => {
+                    if c == b'<' {
+                        if src[i..].starts_with("<v>") {
+                            verbatim = true;
+                        } else if src[i..].starts_with("</v>") {
+                            verbatim = false;
+                        }
+                    }
                     let ch = src[i..].chars().next().unwrap_or(' ');
                     text.push(ch);
                     i += ch.len_utf8();
@@ -466,17 +492,25 @@ impl<'a> Parser<'a> {
                 span: Span::new(text_start, bytes.len()),
             });
         }
+        for (name, span) in std::mem::take(&mut self.open_tags) {
+            self.error("E023", span, format!("`<{name}>` is never closed"));
+        }
     }
 
     /// Checks the markup of a syllable's text and splits off its translation.
     fn text(&mut self, raw: &str, at: usize) -> (String, Option<String>) {
         let mut plain = String::new();
         let mut translation = None;
-        let mut open: Vec<(&str, usize)> = Vec::new();
         let mut i = 0;
         let bytes = raw.as_bytes();
         while i < bytes.len() {
+            let in_tex = matches!(self.open_tags.last(), Some(("v", _)));
             match bytes[i] {
+                // TeX runs to its `</v>`; a `<` in it is a less-than sign.
+                b'<' if in_tex && !raw[i..].starts_with("</v>") => {
+                    plain.push('<');
+                    i += 1;
+                }
                 b'<' => {
                     let Some(len) = raw[i..].find('>') else {
                         self.error("E020", Span::new(at + i, at + i + 1), "this `<` starts no tag");
@@ -490,10 +524,15 @@ impl<'a> Parser<'a> {
                         Some(n) => (true, n),
                         None => (false, tag.split(':').next().unwrap_or(tag)),
                     };
-                    if !TEXT_TAGS.contains(&name) {
+                    let known = TEXT_TAGS.iter().copied().find(|t| *t == name);
+                    let Some(name) = known else {
                         self.error("E020", span, format!("`<{tag}>` is not a GABC tag"));
-                    } else if closing {
-                        match open.pop() {
+                        plain.push_str(&raw[i..i + len + 1]);
+                        i += len + 1;
+                        continue;
+                    };
+                    if closing {
+                        match self.open_tags.pop() {
                             Some((top, _)) if top == name => {}
                             Some((top, _)) => self.error(
                                 "E021",
@@ -511,12 +550,12 @@ impl<'a> Parser<'a> {
                             self.tex_warned = true;
                             self.warning("W101", span, "TeX in `<v>` is not drawn");
                         }
-                        open.push((name, at + i));
+                        self.open_tags.push((name, span));
                     }
                     plain.push_str(&raw[i..i + len + 1]);
                     i += len + 1;
                 }
-                b'[' if open.is_empty() => {
+                b'[' if !in_tex => {
                     let Some(len) = raw[i..].find(']') else {
                         self.error(
                             "E022",
@@ -537,9 +576,6 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        // A tag may stay open across syllables (`<i>` over several words), so an open tag at
-        // the end of one syllable is not an error here.
-        let _ = open;
         (plain.trim_end().to_string(), translation)
     }
 
@@ -592,6 +628,8 @@ impl<'a> Parser<'a> {
         let b = &src.as_bytes()[..end];
         let at = |i: usize| b.get(i).copied().unwrap_or(0);
         let mut i = start;
+        // Where each open `{` is.
+        let mut voices: Vec<usize> = Vec::new();
         while i < end {
             let from = i;
             let c = b[i];
@@ -640,6 +678,40 @@ impl<'a> Parser<'a> {
                     i += 1;
                     Some(ElementKind::At)
                 }
+                b'{' => {
+                    i += 1;
+                    voices.push(from);
+                    Some(ElementKind::VoiceStart)
+                }
+                b'}' => {
+                    i += 1;
+                    if voices.pop().is_none() {
+                        self.error("E015", Span::new(from, i), "this `}` closes nothing");
+                    }
+                    Some(ElementKind::VoiceEnd)
+                }
+                // A sign written after an attribute still belongs to the note before it:
+                // `d_[oh:h].`
+                b'.' | b'\'' | b'_' if sign_target(out).is_some() => {
+                    let target = sign_target(out).unwrap_or(0);
+                    i += 1;
+                    let digits = match c {
+                        b'_' => b'0'..=b'5',
+                        _ => b'0'..=b'1',
+                    };
+                    while i < end && digits.contains(&b[i]) {
+                        i += 1;
+                    }
+                    if let ElementKind::Note(note) = &mut out[target].kind {
+                        match c {
+                            b'.' => note.mora = (note.mora + 1).min(2),
+                            b'_' => note.episema = note.episema.saturating_add(1),
+                            _ => note.ictus = true,
+                        }
+                        note.raw_modifiers.push_str(&src[from..i]);
+                    }
+                    None
+                }
                 b'`' | b',' | b'^' | b';' | b':' => {
                     i += 1;
                     let bar = match c {
@@ -656,7 +728,7 @@ impl<'a> Parser<'a> {
                     // A position or variant after the bar, then signs on it.
                     match (c, at(i)) {
                         (b'`' | b',' | b'^', b'0') | (b',', b'_') | (b':', b'?') => i += 1,
-                        (b';', b'1'..=b'8') => i += 1,
+                        (b';', b'1'..=b'8') | (b',', b'1'..=b'6') => i += 1,
                         _ => {}
                     }
                     while i < end && matches!(b[i], b'\'' | b'_') {
@@ -680,6 +752,11 @@ impl<'a> Parser<'a> {
                     Some(len) => {
                         let inner = &src[i + 1..i + len];
                         let (name, value) = inner.split_once(':').unwrap_or((inner, ""));
+                        // `[oh:h{]` opens a stretch and `[oh}]` ends it.
+                        let (name, value) = match name.strip_suffix(['{', '}']) {
+                            Some(short) if value.is_empty() => (short, &name[short.len()..]),
+                            _ => (name, value),
+                        };
                         if !ATTRIBUTES.contains(&name) {
                             self.error(
                                 "E012",
@@ -744,6 +821,9 @@ impl<'a> Parser<'a> {
                     span: Span::new(from, i),
                 });
             }
+        }
+        for at in voices {
+            self.error("E015", Span::new(at, at + 1), "this `{` is never closed");
         }
     }
 
@@ -973,5 +1053,51 @@ mod tests {
         assert_eq!(parsed.score.syllables[2].translation.as_deref(), Some("Praise"));
         assert_eq!(parsed.score.syllables[2].text, "Al");
         assert_eq!(codes("%%\n(c4) <v>\\x</v>(f)"), ["W101"]);
+    }
+
+    #[test]
+    fn a_tag_may_stay_open_over_several_syllables() {
+        let parsed = parse("%%\n(c4) <eu>E(j) u(jji) o(hg) u(h) a(i) e.</eu>(gh..) (::)");
+        assert!(parsed.is_valid(), "{:?}", parsed.diagnostics);
+        assert_eq!(codes("%%\n(c4) <i>E(j) u(j)"), ["E023"]);
+        assert_eq!(codes("%%\n(c4) E(j) u</i>(j)"), ["E021"]);
+        assert_eq!(codes("%%\n(c4) <b>E(j) u</i>(j)"), ["E021"]);
+    }
+
+    #[test]
+    fn tex_in_v_is_left_alone() {
+        // The parentheses are text, and so are `<` and `%`.
+        let parsed = parse("%%\n(c4) A(f) <i><v>(</v>Non repetitur.<v>)</v></i>(g) <v>$a<b$ %</v>(h)");
+        assert_eq!(parsed.diagnostics.iter().map(|d| d.code).collect::<Vec<_>>(), ["W101"]);
+        assert_eq!(parsed.score.syllables.len(), 4);
+        assert_eq!(parsed.score.syllables[2].text, "<i><v>(</v>Non repetitur.<v>)</v></i>");
+        // A translation may hold TeX too.
+        let parsed = parse("%%\n(c4) HIC[<v>\\textup{(Haec)}</v>](f)");
+        assert!(parsed.is_valid(), "{:?}", parsed.diagnostics);
+        assert_eq!(parsed.score.syllables[1].text, "HIC");
+    }
+
+    #[test]
+    fn a_second_voice_in_braces() {
+        let k = kinds("%%\n(c4) A(ff/[1]{ix}fdg)");
+        assert!(matches!(k[4], ElementKind::VoiceStart), "{k:?}");
+        assert!(matches!(k[5], ElementKind::Accidental { .. }), "{k:?}");
+        assert!(matches!(k[6], ElementKind::VoiceEnd), "{k:?}");
+        assert_eq!(codes("%%\n(c4) A({f)"), ["E015"]);
+        assert_eq!(codes("%%\n(c4) A(f})"), ["E015"]);
+    }
+
+    #[test]
+    fn stretches_bar_positions_and_signs_after_an_attribute() {
+        let k = kinds("%%\n(c4) A(g[oh:m{]hf[oh}]) (,3) B(d_[oh:h].)");
+        assert!(k.contains(&ElementKind::Attribute { name: "oh".into(), value: "m{".into() }));
+        assert!(k.contains(&ElementKind::Attribute { name: "oh".into(), value: "}".into() }));
+        assert!(k.contains(&ElementKind::Bar(Bar::Quarter)));
+        let Some(ElementKind::Note(d)) = k.iter().rev().find(|e| matches!(e, ElementKind::Note(_))) else {
+            panic!("{k:?}")
+        };
+        assert_eq!((d.mora, d.episema), (1, 1));
+        // With no note before it, a sign is still an error.
+        assert_eq!(codes("%%\n(c4) A(.)"), ["E011"]);
     }
 }
