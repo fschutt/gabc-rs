@@ -1,14 +1,16 @@
 //! `gabc check [--summary] <file or directory>...`
 //!
-//! Checks `.gabc` files and the ```` ```gabc ```` blocks of `.md` files. Prints one line per
-//! problem as `path:line:col: error[E011]: message` and exits with 1 if any file has an
+//! Checks `.gabc` and `.abc` files and the notation blocks of `.md` files. Prints one line
+//! per problem as `path:line:col: error[E011]: message` and exits with 1 if any file has an
 //! error. `--summary` prints counts instead, for a run over a whole corpus.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use gabc_rs::{gabc, Severity};
+use gabc_rs::diagnostics::line_col;
+use gabc_rs::markdown::{notation_blocks, Language};
+use gabc_rs::{abc, gabc, Diagnostic, Severity};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -26,13 +28,13 @@ fn main() -> ExitCode {
         }
     }
     if files.is_empty() {
-        eprintln!("gabc: no .gabc or .md files to check");
+        eprintln!("gabc: no .gabc, .abc or .md files to check");
         return ExitCode::from(2);
     }
     files.sort();
 
     let (mut clean, mut warned, mut rejected, mut scores) = (0usize, 0usize, 0usize, 0usize);
-    // code -> (problems, files, an example)
+    // code -> (problems, scores, an example)
     let mut by_code: BTreeMap<&'static str, (usize, usize, String)> = BTreeMap::new();
     for path in &files {
         let Ok(text) = std::fs::read_to_string(path) else {
@@ -40,11 +42,13 @@ fn main() -> ExitCode {
             rejected += 1;
             continue;
         };
-        for (source, first_line) in sources(path, &text) {
+        for diagnostics in check(path, &text) {
             scores += 1;
-            let parsed = gabc::parse(&source);
             let mut seen = Vec::new();
-            for d in &parsed.diagnostics {
+            for d in &diagnostics {
+                let (line, col) = line_col(&text, d.span.start);
+                let kind = if d.severity == Severity::Error { "error" } else { "warning" };
+                let rendered = format!("{}:{line}:{col}: {kind}[{}]: {}", path.display(), d.code, d.message);
                 if summary {
                     let entry = by_code.entry(d.code).or_default();
                     entry.0 += 1;
@@ -53,22 +57,18 @@ fn main() -> ExitCode {
                         entry.1 += 1;
                     }
                     if entry.2.is_empty() {
-                        entry.2 = format!("{}: {}", path.display(), d.render(&source));
+                        entry.2 = rendered;
                     }
                 } else {
-                    // Positions inside a Markdown block are counted from the top of the file.
-                    let rendered = d.render(&source);
-                    let (line, rest) = rendered.split_once(':').unwrap_or(("1", &rendered));
-                    let line = line.parse::<usize>().unwrap_or(1) + first_line;
-                    println!("{}:{line}:{rest}", path.display());
+                    println!("{rendered}");
                 }
             }
-            if !parsed.is_valid() {
+            if diagnostics.iter().any(|d| d.severity == Severity::Error) {
                 rejected += 1;
-            } else if parsed.diagnostics.iter().any(|d| d.severity == Severity::Warning) {
-                warned += 1;
-            } else {
+            } else if diagnostics.is_empty() {
                 clean += 1;
+            } else {
+                warned += 1;
             }
         }
     }
@@ -79,8 +79,8 @@ fn main() -> ExitCode {
         println!("  clean:          {clean:>6}  {:.1}%", pct(clean));
         println!("  with warnings:  {warned:>6}  {:.1}%", pct(warned));
         println!("  rejected:       {rejected:>6}  {:.1}%", pct(rejected));
-        for (code, (problems, in_files, example)) in &by_code {
-            println!("{code}: {problems} in {in_files} scores, e.g. {example}");
+        for (code, (problems, in_scores, example)) in &by_code {
+            println!("{code}: {problems} in {in_scores} scores, e.g. {example}");
         }
     }
     if rejected > 0 {
@@ -97,29 +97,37 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) {
                 collect(&entry.path(), out);
             }
         }
-    } else if matches!(path.extension().and_then(|e| e.to_str()), Some("gabc" | "md")) {
+    } else if matches!(path.extension().and_then(|e| e.to_str()), Some("gabc" | "abc" | "md")) {
         out.push(path.to_path_buf());
     }
 }
 
-/// The GABC sources of a file with the number of lines before each: the file itself, or the
-/// fenced `gabc` blocks of a Markdown file.
-fn sources(path: &Path, text: &str) -> Vec<(String, usize)> {
-    if path.extension().and_then(|e| e.to_str()) != Some("md") {
-        return vec![(text.to_string(), 0)];
-    }
-    let mut out = Vec::new();
-    let mut block: Option<(String, usize)> = None;
-    for (n, line) in text.lines().enumerate() {
-        match &mut block {
-            None if line.trim() == "```gabc" => block = Some((String::new(), n + 1)),
-            None => {}
-            Some(_) if line.trim() == "```" => out.extend(block.take()),
-            Some((source, _)) => {
-                source.push_str(line);
-                source.push('\n');
-            }
+/// The diagnostics of each score in a file, with spans that are positions in the file: one
+/// score for a `.gabc` or `.abc` file, one per notation block for Markdown. Problems with how
+/// the blocks are wrapped count as one more score.
+fn check(path: &Path, text: &str) -> Vec<Vec<Diagnostic>> {
+    let parse = |language: Language, source: &str, offset: usize| {
+        let mut diagnostics = match language {
+            Language::Abc => abc::parse(source).diagnostics,
+            Language::Gabc => gabc::parse(source).diagnostics,
+        };
+        for d in &mut diagnostics {
+            d.span.start += offset;
+            d.span.end += offset;
         }
+        diagnostics
+    };
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("md") => {
+            let (blocks, wrapping) = notation_blocks(text);
+            let mut out: Vec<Vec<Diagnostic>> =
+                blocks.iter().map(|b| parse(b.language, &b.source, b.offset)).collect();
+            if !wrapping.is_empty() {
+                out.push(wrapping);
+            }
+            out
+        }
+        Some("abc") => vec![parse(Language::Abc, text, 0)],
+        _ => vec![parse(Language::Gabc, text, 0)],
     }
-    out
 }
