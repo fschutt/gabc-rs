@@ -9,8 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use gabc_rs::diagnostics::line_col;
-use gabc_rs::markdown::{notation_blocks, Language};
-use gabc_rs::{abc, gabc, Diagnostic, Severity};
+use gabc_rs::{abc, gabc, markdown, Diagnostic, Severity};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -103,31 +102,11 @@ fn collect(path: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// The diagnostics of each score in a file, with spans that are positions in the file: one
-/// score for a `.gabc` or `.abc` file, one per notation block for Markdown. Problems with how
-/// the blocks are wrapped count as one more score.
+/// score for a `.gabc` or `.abc` file, one per notation block for Markdown.
 fn check(path: &Path, text: &str) -> Vec<Vec<Diagnostic>> {
-    let parse = |language: Language, source: &str, offset: usize| {
-        let mut diagnostics = match language {
-            Language::Abc => abc::parse(source).diagnostics,
-            Language::Gabc => gabc::parse(source).diagnostics,
-        };
-        for d in &mut diagnostics {
-            d.span.start += offset;
-            d.span.end += offset;
-        }
-        diagnostics
-    };
     match path.extension().and_then(|e| e.to_str()) {
-        Some("md") => {
-            let (blocks, wrapping) = notation_blocks(text);
-            let mut out: Vec<Vec<Diagnostic>> =
-                blocks.iter().map(|b| parse(b.language, &b.source, b.offset)).collect();
-            if !wrapping.is_empty() {
-                out.push(wrapping);
-            }
-            out
-        }
-        Some("abc") => vec![parse(Language::Abc, text, 0)],
-        _ => vec![parse(Language::Gabc, text, 0)],
+        Some("md") => markdown::check(text),
+        Some("abc") => vec![abc::parse(text).diagnostics],
+        _ => vec![gabc::parse(text).diagnostics],
     }
 }

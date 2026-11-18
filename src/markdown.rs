@@ -108,12 +108,50 @@ pub fn notation_blocks(text: &str) -> (Vec<Block>, Vec<Diagnostic>) {
     (blocks, diagnostics)
 }
 
+/// Checks every notation block of a document: how it is wrapped, and its ABC or GABC. One
+/// list per block, and one more for the wrapping if something is wrong with it. The spans are
+/// positions in `text`, so [`Diagnostic::render`] with `text` gives the line in the document.
+pub fn check(text: &str) -> Vec<Vec<Diagnostic>> {
+    let (blocks, wrapping) = notation_blocks(text);
+    let mut out: Vec<Vec<Diagnostic>> = blocks
+        .iter()
+        .map(|block| {
+            let mut diagnostics = match block.language {
+                Language::Abc => crate::abc::parse(&block.source).diagnostics,
+                Language::Gabc => crate::gabc::parse(&block.source).diagnostics,
+            };
+            for d in &mut diagnostics {
+                d.span.start += block.offset;
+                d.span.end += block.offset;
+            }
+            diagnostics
+        })
+        .collect();
+    if !wrapping.is_empty() {
+        out.push(wrapping);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn codes(text: &str) -> Vec<&'static str> {
         notation_blocks(text).1.iter().map(|d| d.code).collect()
+    }
+
+    #[test]
+    fn a_document_is_checked_with_positions_in_the_document() {
+        // The sample block has `X:` and `K:` only: three header lines are missing.
+        let found = check(GOOD);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].iter().map(|d| d.code).collect::<Vec<_>>(), ["E206", "E206", "E206"]);
+        let text = GOOD.replace("X:1\nK:C\n", "X:1\nT:t\nM:3/4\nL:1/4\nK:C\nC D ? |]\n");
+        let found = check(&text);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0][0].code, "E210");
+        assert_eq!(found[0][0].render(&text), "16:5: error[E210]: `?` is not part of the notation");
     }
 
     const GOOD: &str = "---\ntitle: x\n---\n\nText.\n\n<details class=\"notation\">\n<summary>Noten</summary>\n\n```abc\nX:1\nK:C\n```\n\n</details>\n";
