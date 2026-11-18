@@ -375,12 +375,13 @@ mod tests {
      character                 x
      end of style              ST_VERBATIM
      end of style              ST_PROTRUSION_FACTOR
-     end of style                ST_CENTER
      character                 .
+     end of style                ST_CENTER
 ";
+        // What Gregorio adds for the punctuation (a protrusion factor in TeX) is not text.
         assert_eq!(
             centres_from_dump(dump),
-            [("quo".to_string(), "o".to_string()), ("Ps.".to_string(), "Ps".to_string())]
+            [("quo".to_string(), "o".to_string()), ("Ps.".to_string(), "Ps.".to_string())]
         );
         let parsed = gabc_rs::gabc::parse("%%\n(c4) quo(f) (;) Ps.(g)");
         assert_eq!(centres(&parsed.score), centres_from_dump(dump));

@@ -55,6 +55,7 @@ pub unsafe extern "C" fn gabc_render(language: u32, source: *const u8, len: usiz
 }
 
 #[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "env")]
 extern "C" {
     /// The width of the UTF-8 text at `pointer`, in em, measured by the page.
     fn gabc_measure(pointer: *const u8, len: usize) -> f32;
