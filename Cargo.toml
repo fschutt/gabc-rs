@@ -1,0 +1,20 @@
+[package]
+name = "gabc-rs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Gregorian chant (GABC) and hymn (ABC) notation to HTML, PDF and PNG"
+
+[dependencies]
+
+[workspace]
+members = ["xtask"]
+
+# The azul + printpdf stack is large and this machine's disk is nearly full:
+# no debug info, and dependencies lightly optimized so layout and the CPU
+# rasterizer run at a usable speed in dev builds.
+[profile.dev]
+debug = false
+
+[profile.dev.package."*"]
+opt-level = 1

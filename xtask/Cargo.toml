@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Development tasks for gabc-rs: `cargo run -p xtask -- font` builds the neume font"
+
+[dependencies]
+# The font builder (`allsorts::font_builder`) is not in a released allsorts-azul yet:
+# https://github.com/fschutt/allsorts-azul/pull/3 (branch `feat/font-builder`). Pinned by
+# revision, because branches move.
+allsorts = { package = "allsorts-azul", git = "https://github.com/fschutt/allsorts-azul", rev = "70c05b4ea5e4fb8d700f878901d3123f94b2cc74", default-features = false, features = ["flate2_rust"] }
+serde_json = "1"
