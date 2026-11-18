@@ -2,10 +2,12 @@
 
 Gregorian chant notation (GABC) and metered hymns (ABC) rendered through one HTML+CSS string into PDF, PNG and the browser.
 
-**Status: early.** The parsers and the checker work. A chant score is drawn: neumes, bars, clef, custos, lyrics, broken into lines. Still to come: real text metrics, hyphens, the drop cap, hymns (ABC), the WASM page.
+**Status: early.** The parsers and the checker work. Chant and hymns are drawn in a first version: neumes on four lines, round notes on five, with clef, bars, lyrics and line breaks. Still to come: real text metrics, ties, slurs and beams, the drop cap, the WASM page.
 
 - `gabc check <files or directories>`: checks `.gabc` and `.abc` files and the notation blocks of Markdown files, and prints every problem as `path:line:col: error[E011]: message`.
-- `gabc html <file.gabc>`: the score as an HTML document, which printpdf turns into a PDF and azul into a PNG.
+- `gabc html <file.gabc or file.abc>`: the score as an HTML document, which printpdf turns into a PDF and azul into a PNG.
+- `gabc_rs::render`: one notation block to the HTML of its score.
+- `gabc_rs::abc_layout`: a hymn on a five-line staff with its verses in rows.
 - `gabc_rs::neume`, `gabc_rs::layout`, `gabc_rs::html`: notes into neumes with their glyphs (a port of exsurge), syllables into lines, lines into HTML and CSS.
 - `gabc_rs::gabc::parse`: a strict GABC parser. It reports every problem with its position and still returns what it could read.
 - `gabc_rs::abc::parse`: the same for hymns, in a subset of ABC 2.1 (one tune, one voice, lyrics). It also checks that bars add up to the metre and that every note has its syllable.
@@ -34,4 +36,5 @@ Neumes are glyphs of the neume font, placed with `em` offsets, so one `font-size
 
 - The code is under the MIT licence, see `LICENSE`.
 - The glyph outlines in `third_party/exsurge/` and the font built from them come from [exsurge](https://github.com/frmatthew/exsurge), Copyright (c) 2008-2016 Fr. Matthew Spencer, OSJ, MIT licence, see `third_party/exsurge/LICENSE`.
+- `assets/fonts/gabc-music.ttf` holds 33 glyphs of [Bravura](https://github.com/steinbergmedia/bravura), Copyright (c) 2015 Steinberg Media Technologies GmbH, under the SIL Open Font License 1.1 (`assets/fonts/gabc-music-OFL.txt`). The licence reserves the name "Bravura", so the font is called "Gabc Music". `cargo run -p xtask -- music-font` builds it.
 - gabc-rs contains no code from Gregorio, which is under the GPL.

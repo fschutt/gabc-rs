@@ -9,12 +9,40 @@
 //! as HTML and CSS).
 
 pub mod abc;
+pub mod abc_layout;
 pub mod diagnostics;
 pub mod gabc;
 pub mod glyphs;
 pub mod html;
 pub mod layout;
 pub mod markdown;
+pub mod music_glyphs;
 pub mod neume;
 
 pub use diagnostics::{Diagnostic, Severity, Span};
+
+/// The score of one notation block as HTML: the `<div class="gabc-score">` of [`html::score`],
+/// to go with the rules of [`html::style`]. A block with errors gives its diagnostics instead,
+/// with spans that are positions in `source`.
+pub fn render(
+    language: markdown::Language,
+    source: &str,
+    options: &layout::Options,
+) -> Result<String, Vec<Diagnostic>> {
+    let (diagnostics, engraving) = match language {
+        markdown::Language::Abc => {
+            let parsed = abc::parse(source);
+            let engraving = parsed.is_valid().then(|| abc_layout::engrave(&parsed.tune, options));
+            (parsed.diagnostics, engraving)
+        }
+        markdown::Language::Gabc => {
+            let parsed = gabc::parse(source);
+            let engraving = parsed.is_valid().then(|| layout::engrave(&parsed.score, options));
+            (parsed.diagnostics, engraving)
+        }
+    };
+    match engraving {
+        Some(engraving) => Ok(html::score(&engraving)),
+        None => Err(diagnostics),
+    }
+}

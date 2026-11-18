@@ -50,10 +50,20 @@ pub struct Rule {
     pub height: f32,
 }
 
+/// A glyph of the music font at its place in a line.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlacedMusic {
+    pub glyph: crate::music_glyphs::MusicGlyph,
+    pub x: f32,
+    pub pitch: f32,
+}
+
 /// A syllable's text at its place.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lyric {
     pub x: f32,
+    /// Which row of text under the staff: 0 for chant and for a hymn's first verse.
+    pub row: usize,
     pub spans: Vec<Span>,
 }
 
@@ -68,9 +78,12 @@ pub struct Span {
     pub coloured: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Line {
+    /// The pitches of the staff lines: four for chant, five for a hymn.
+    pub staff: Vec<f32>,
     pub glyphs: Vec<PlacedGlyph>,
+    pub music: Vec<PlacedMusic>,
     pub rules: Vec<Rule>,
     pub lyrics: Vec<Lyric>,
     /// The highest and lowest pitch drawn on the line, staff included.
@@ -83,25 +96,53 @@ const TOP_LINE: f32 = 9.0;
 /// The pitch of the bottom staff line.
 const BOTTOM_LINE: f32 = 3.0;
 
+impl Default for Line {
+    fn default() -> Self {
+        Line {
+            staff: vec![3.0, 5.0, 7.0, 9.0],
+            glyphs: Vec::new(),
+            music: Vec::new(),
+            rules: Vec::new(),
+            lyrics: Vec::new(),
+            highest: TOP_LINE,
+            lowest: BOTTOM_LINE,
+        }
+    }
+}
+
 impl Line {
+    fn top_line(&self) -> f32 {
+        self.staff.iter().copied().fold(f32::MIN, f32::max)
+    }
+
+    fn bottom_line(&self) -> f32 {
+        self.staff.iter().copied().fold(f32::MAX, f32::min)
+    }
+
     /// The room above the top staff line, in em.
     pub fn head_room(&self) -> f32 {
-        ((self.highest - TOP_LINE).max(0.0) + 2.5) * STEP
+        ((self.highest - self.top_line()).max(0.0) + 2.5) * STEP
     }
 
     /// The distance of a pitch from the top of the line, in em.
     pub fn y(&self, pitch: f32) -> f32 {
-        self.head_room() + (TOP_LINE - pitch) * STEP
+        self.head_room() + (self.top_line() - pitch) * STEP
     }
 
-    /// The top of the lyrics, in em from the top of the line.
+    /// The top of the first row of lyrics, in em from the top of the line.
     pub fn lyric_y(&self) -> f32 {
-        self.y(self.lowest.min(BOTTOM_LINE)) + 2.2 * STEP
+        self.y(self.lowest.min(self.bottom_line())) + 2.2 * STEP
+    }
+
+    /// The top of a row of lyrics.
+    pub fn lyric_row_y(&self, row: usize, lyric_size: f32) -> f32 {
+        self.lyric_y() + row as f32 * lyric_size * 1.3
     }
 
     /// The height of the line with its lyrics, in em.
     pub fn height(&self, lyric_size: f32) -> f32 {
-        self.lyric_y() + lyric_size * 1.35
+        let rows = self.lyrics.iter().map(|l| l.row + 1).max().unwrap_or(1);
+        self.lyric_row_y(rows - 1, lyric_size) + lyric_size * 1.35
     }
 }
 
@@ -200,7 +241,7 @@ pub fn engrave(score: &Score, options: &Options) -> Engraving {
                 line.lowest = line.lowest.min(rule.top - rule.height);
             }
             if !block.spans.is_empty() {
-                line.lyrics.push(Lyric { x: x - block.text_lead, spans: block.spans.clone() });
+                line.lyrics.push(Lyric { x: x - block.text_lead, row: 0, spans: block.spans.clone() });
             }
         }
         if let Some(pitch) = custos {
@@ -557,7 +598,7 @@ fn vowel_at(text: &str) -> usize {
 }
 
 /// A rough width of text in em, for when no font is at hand.
-fn estimate_width(text: &str) -> f32 {
+pub(crate) fn estimate_width(text: &str) -> f32 {
     text.chars()
         .map(|c| match c {
             'i' | 'j' | 'l' | 'í' | '.' | ',' | ';' | ':' | '!' | '\'' | '|' | ' ' | '\u{a0}' => 0.28,

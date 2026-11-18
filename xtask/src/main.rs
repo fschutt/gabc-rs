@@ -4,6 +4,7 @@
 //! of exsurge (`third_party/exsurge/Exsurge.Glyphs.js`, MIT, © Fr. Matthew Spencer, OSJ).
 
 mod corpus;
+mod music;
 mod structure;
 mod svg_path;
 
@@ -70,12 +71,13 @@ const GLYPHS: &[(char, &str)] = &[
     ('\u{E023}', "Virgula"),
 ];
 
-const USAGE: &str = "usage: cargo run -p xtask -- font | corpus gregobase [--oracle <program> | --verdicts <file.tsv>]";
+const USAGE: &str = "usage: cargo run -p xtask -- font | music-font | corpus gregobase [--oracle <program> | --verdicts <file.tsv>]";
 
 fn main() -> ExitCode {
     let task = std::env::args().nth(1).unwrap_or_default();
     let result = match task.as_str() {
         "font" => build_font(),
+        "music-font" => music::build(&repo_root()),
         "corpus" if std::env::args().nth(2).as_deref() == Some("gregobase") => {
             let args: Vec<String> = std::env::args().skip(3).collect();
             match args.as_slice() {

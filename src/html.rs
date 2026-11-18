@@ -12,6 +12,8 @@ use crate::neume::{LINE_WEIGHT, STEP};
 
 /// The family name of the neume font (`assets/fonts/gabc-neumes.ttf`).
 pub const NEUME_FAMILY: &str = "Gabc Neumes";
+/// The family name of the music font for hymns (`assets/fonts/gabc-music.ttf`).
+pub const MUSIC_FAMILY: &str = "Gabc Music";
 
 /// The style rules that [`score`] relies on. `size` is the font size of the score with its
 /// unit (one em is four staff spaces): `"34px"`.
@@ -21,6 +23,7 @@ pub fn style(size: &str, lyric_size: f32) -> String {
          .gabc-line {{ position: relative; width: 100%; break-inside: avoid; page-break-inside: avoid; }}\n\
          .gabc-rule {{ position: absolute; background: #000000; }}\n\
          .gabc-g {{ position: absolute; font-family: \"{NEUME_FAMILY}\"; font-size: 1em; line-height: 1; }}\n\
+         .gabc-m {{ position: absolute; font-family: \"{MUSIC_FAMILY}\"; font-size: 1em; line-height: 1; }}\n\
          .gabc-ly {{ position: absolute; font-size: {lyric_size}em; line-height: 1; white-space: nowrap; }}\n\
          .gabc-sc {{ font-variant: small-caps; }}\n\
          .gabc-c {{ color: #b00000; }}\n"
@@ -45,8 +48,7 @@ fn line(out: &mut String, line: &Line, engraving: &Engraving) {
         line.height(size),
         2.0 * STEP
     );
-    // The four staff lines: d, f, h, j.
-    for pitch in [3.0, 5.0, 7.0, 9.0] {
+    for &pitch in &line.staff {
         let _ = writeln!(
             out,
             "<div class=\"gabc-rule\" style=\"left:0;top:{:.4}em;width:{:.4}em;height:{LINE_WEIGHT}em\"></div>",
@@ -74,6 +76,15 @@ fn line(out: &mut String, line: &Line, engraving: &Engraving) {
             glyph.glyph.char()
         );
     }
+    for glyph in &line.music {
+        let _ = writeln!(
+            out,
+            "<span class=\"gabc-m\" style=\"left:{:.4}em;top:{:.4}em\">{}</span>",
+            glyph.x,
+            line.y(glyph.pitch) - 0.5,
+            glyph.glyph.char()
+        );
+    }
     for lyric in &line.lyrics {
         // An em in `left` and `top` is the element's own font size, so offsets in the
         // score's em are divided by the size of the lyrics.
@@ -81,7 +92,7 @@ fn line(out: &mut String, line: &Line, engraving: &Engraving) {
             out,
             "<span class=\"gabc-ly\" style=\"left:{:.4}em;top:{:.4}em\">",
             lyric.x / size,
-            line.lyric_y() / size
+            line.lyric_row_y(lyric.row, size) / size
         );
         for span in &lyric.spans {
             let mut open = String::new();

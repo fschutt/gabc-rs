@@ -50,7 +50,11 @@ struct Fonts {
     text_family: String,
     text: Vec<u8>,
     neumes: Vec<u8>,
+    /// The font for hymns, if it lies next to the neume font as `gabc-music.ttf`.
+    music: Option<Vec<u8>>,
 }
+
+const MUSIC_FAMILY: &str = "Gabc Music";
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -62,6 +66,7 @@ fn main() {
         text: std::fs::read(&args[1]).expect("read text font"),
         text_family: args[2].clone(),
         neumes: std::fs::read(&args[3]).expect("read neume font"),
+        music: std::fs::read(std::path::Path::new(&args[3]).with_file_name("gabc-music.ttf")).ok(),
     };
     let out = args[4].clone();
     let lines: usize = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(24);
@@ -229,6 +234,9 @@ fn render_pdf(html: &str, fonts: &Fonts) -> Result<(Vec<u8>, usize, Vec<String>)
     let mut map = BTreeMap::new();
     map.insert(fonts.text_family.clone(), Base64OrRaw::Raw(fonts.text.clone()));
     map.insert(NEUME_FAMILY.to_string(), Base64OrRaw::Raw(fonts.neumes.clone()));
+    if let Some(music) = &fonts.music {
+        map.insert(MUSIC_FAMILY.to_string(), Base64OrRaw::Raw(music.clone()));
+    }
     let options = GeneratePdfOptions {
         font_embedding: Some(true),
         page_width: Some(PAGE_W_MM),
@@ -259,10 +267,11 @@ fn render_png(html: &str, fonts: &Fonts) -> Result<(Vec<u8>, u32, u32), String> 
     // No system fonts: only what we register, as it will be in WASM.
     let mut fm: FontManager<FontRef> = FontManager::new(rust_fontconfig::FcFontCache::default())
         .map_err(|e| format!("font manager: {e:?}"))?;
-    for (family, bytes) in [
-        (fonts.text_family.as_str(), &fonts.text),
-        (NEUME_FAMILY, &fonts.neumes),
-    ] {
+    let mut families = vec![(fonts.text_family.as_str(), &fonts.text), (NEUME_FAMILY, &fonts.neumes)];
+    if let Some(music) = &fonts.music {
+        families.push((MUSIC_FAMILY, music));
+    }
+    for (family, bytes) in families {
         let coverage = rust_fontconfig::FcParseFontBytes(bytes, family)
             .and_then(|p| p.first().map(|(pattern, _)| pattern.unicode_ranges.clone()))
             .unwrap_or_default();

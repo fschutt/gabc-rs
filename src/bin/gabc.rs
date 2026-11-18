@@ -1,5 +1,5 @@
 //! `gabc check [--summary] <file or directory>...`
-//! `gabc html <file.gabc> [--width <em>] [--size <css size>] [--font <family>]`
+//! `gabc html <file.gabc or file.abc> [--width <em>] [--size <css size>] [--font <family>]`
 //!
 //! Checks `.gabc` and `.abc` files and the notation blocks of `.md` files. Prints one line
 //! per problem as `path:line:col: error[E011]: message` and exits with 1 if any file has an
@@ -19,7 +19,7 @@ fn main() -> ExitCode {
         Some("html") => return html(&args.collect::<Vec<_>>()),
         _ => {
             eprintln!("usage: gabc check [--summary] <file or directory>...");
-            eprintln!("       gabc html <file.gabc> [--width <em>] [--size <css size>] [--font <family>]");
+            eprintln!("       gabc html <file.gabc or file.abc> [--width <em>] [--size <css size>] [--font <family>]");
             return ExitCode::from(2);
         }
     }
@@ -109,24 +109,32 @@ fn html(args: &[String]) -> ExitCode {
         }
     }
     let Some(file) = file else {
-        eprintln!("usage: gabc html <file.gabc> [--width <em>] [--size <css size>] [--font <family>]");
+        eprintln!("usage: gabc html <file.gabc or file.abc> [--width <em>] [--size <css size>] [--font <family>]");
         return ExitCode::from(2);
     };
     let Ok(text) = std::fs::read_to_string(&file) else {
         eprintln!("{file}: not readable as UTF-8");
         return ExitCode::from(2);
     };
-    let parsed = gabc::parse(&text);
-    for d in &parsed.diagnostics {
+    let options = gabc_rs::layout::Options { width, ..Default::default() };
+    let is_abc = file.ends_with(".abc");
+    let (diagnostics, valid, engraving, title) = if is_abc {
+        let parsed = abc::parse(&text);
+        let engraving = gabc_rs::abc_layout::engrave(&parsed.tune, &options);
+        (parsed.diagnostics.clone(), parsed.is_valid(), engraving, parsed.tune.title.clone())
+    } else {
+        let parsed = gabc::parse(&text);
+        let engraving = gabc_rs::layout::engrave(&parsed.score, &options);
+        let title = parsed.score.headers.iter().find(|h| h.name == "name").map_or(String::new(), |h| h.value.clone());
+        (parsed.diagnostics.clone(), parsed.is_valid(), engraving, title)
+    };
+    for d in &diagnostics {
         eprintln!("{file}:{}", d.render(&text));
     }
-    if !parsed.is_valid() {
+    if !valid {
         return ExitCode::from(1);
     }
-    let options = gabc_rs::layout::Options { width, ..Default::default() };
-    let engraving = gabc_rs::layout::engrave(&parsed.score, &options);
-    let title = parsed.score.headers.iter().find(|h| h.name == "name").map_or("", |h| h.value.as_str());
-    print!("{}", gabc_rs::html::document(&engraving, title, &font, &size));
+    print!("{}", gabc_rs::html::document(&engraving, &title, &font, &size));
     ExitCode::SUCCESS
 }
 
