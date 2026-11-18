@@ -1,0 +1,44 @@
+name: Corpus
+
+# The reference run: every score of the GregoBase library through our parser and through
+# Gregorio, which is installed here as a program and is the reference for what valid GABC
+# is. The report lists where the two disagree.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - src/**
+      - xtask/src/corpus.rs
+      - .github/workflows/corpus.yml
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  gregobase:
+    name: GregoBase
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Gregorio
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gregorio
+          gregorio --version
+          gregorio --help
+      - name: Run
+        run: cargo run --release -p xtask -- corpus gregobase --oracle gregorio
+      - name: Summary
+        if: always()
+        run: sed '/^## Scores/,$d' target/corpus/gregobase-report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gregobase-report
+          path: |
+            target/corpus/gregobase-report.md
+            target/corpus/gregobase-verdicts.tsv

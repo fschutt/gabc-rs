@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Parser and tools
+        run: cargo test -p gabc-rs -p xtask
+      - name: The neume font is up to date
+        run: |
+          cargo run -p xtask -- font
+          git diff --exit-code -- assets/fonts
+
+  engines:
+    name: PDF and PNG engines build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p spike
