@@ -19,6 +19,8 @@ use std::process::Command;
 
 use gabc_rs::{gabc, Severity};
 
+use crate::structure;
+
 const DUMP_URL: &str =
     "https://raw.githubusercontent.com/gregorio-project/GregoBase/HEAD/gregobase_online.sql";
 const TABLE: &str = "INSERT INTO `gregobase_chants`";
@@ -62,7 +64,7 @@ pub fn gregobase(root: &Path, oracle: Oracle) -> Result<(), String> {
         std::fs::write(&path, &score.source).map_err(|e| format!("{}: {e}", path.display()))?;
         files.push((row.id, path, score));
     }
-    let verdicts: Vec<Option<OracleVerdict>> = match oracle {
+    let verdicts: Vec<Option<OracleVerdict>> = match &oracle {
         Oracle::Program(program) => ask_oracle(program, &files)?.into_iter().map(Some).collect(),
         Oracle::Saved(path) => {
             let saved = saved_verdicts(path)?;
@@ -79,6 +81,10 @@ pub fn gregobase(root: &Path, oracle: Oracle) -> Result<(), String> {
     std::fs::write(&path, &text).map_err(|e| format!("{}: {e}", path.display()))?;
     let tsv = dir.join("gregobase-verdicts.tsv");
     std::fs::write(&tsv, report.verdicts_tsv()).map_err(|e| format!("{}: {e}", tsv.display()))?;
+    if matches!(oracle, Oracle::Program(_)) {
+        let tsv = dir.join("gregobase-structure.tsv");
+        std::fs::write(&tsv, report.structure_tsv()).map_err(|e| format!("{}: {e}", tsv.display()))?;
+    }
     print!("{}", text.split("\n## Scores").next().unwrap_or(&text));
     println!("\nreport: {}", path.display());
     Ok(())
@@ -90,6 +96,8 @@ struct OracleVerdict {
     accepted: bool,
     /// Its first line of messages, if it had any.
     message: String,
+    /// What it read, as a line of tokens (see [`crate::structure`]), if it accepted the file.
+    structure: Option<String>,
 }
 
 /// Reads the `id`, `oracle` and `oracle_message` columns of a verdicts file.
@@ -101,7 +109,17 @@ fn saved_verdicts(path: &Path) -> Result<BTreeMap<u32, OracleVerdict>, String> {
         if let (Some(id), Some(verdict)) = (fields.first().and_then(|f| f.parse().ok()), fields.get(3)) {
             if !verdict.is_empty() {
                 let message = fields.get(4).copied().unwrap_or("").to_string();
-                out.insert(id, OracleVerdict { accepted: *verdict == "accept", message });
+                out.insert(id, OracleVerdict { accepted: *verdict == "accept", message, structure: None });
+            }
+        }
+    }
+    // The token lines of the same run, if they lie next to the verdicts.
+    if let Ok(text) = std::fs::read_to_string(path.with_file_name("gregobase-structure.tsv")) {
+        for line in text.lines() {
+            if let Some((id, tokens)) = line.split_once('\t') {
+                if let Some(verdict) = id.parse().ok().and_then(|id: u32| out.get_mut(&id)) {
+                    verdict.structure = Some(tokens.to_string());
+                }
             }
         }
     }
@@ -137,12 +155,19 @@ fn ask_oracle(program: &str, files: &[(u32, PathBuf, ScoreFile)]) -> Result<Vec<
                                         .unwrap_or("")
                                         .trim()
                                         .to_string();
-                                    OracleVerdict {
-                                        accepted: out.status.success() && !messages.contains("error"),
-                                        message: line,
-                                    }
+                                    let accepted = out.status.success() && !messages.contains("error");
+                                    // What it read, from its structural dump.
+                                    let structure = accepted
+                                        .then(|| Command::new(program).args(["-F", "dump", "-S"]).arg(path).output().ok())
+                                        .flatten()
+                                        .map(|dump| structure::from_dump(&String::from_utf8_lossy(&dump.stdout)));
+                                    OracleVerdict { accepted, message: line, structure }
                                 }
-                                Err(e) => OracleVerdict { accepted: false, message: format!("did not run: {e}") },
+                                Err(e) => OracleVerdict {
+                                    accepted: false,
+                                    message: format!("did not run: {e}"),
+                                    structure: None,
+                                },
                             }
                         })
                         .collect::<Vec<_>>()
@@ -248,6 +273,8 @@ struct Outcome {
     /// Our first error, if we reject the score.
     error: Option<(&'static str, String)>,
     degraded: bool,
+    /// What we read, as a line of tokens, if we accept the score.
+    structure: Option<String>,
     oracle: Option<OracleVerdict>,
 }
 
@@ -285,6 +312,7 @@ impl Report {
         self.outcomes.push(Outcome {
             id,
             degraded: error.is_none() && (score.dropped_tex || !parsed.diagnostics.is_empty()),
+            structure: error.is_none().then(|| structure::ours(&parsed.score)),
             error,
             oracle,
         });
@@ -301,6 +329,17 @@ impl Report {
                 None => ("", String::new()),
             };
             let _ = writeln!(s, "{}\t{ours}\t{code}\t{oracle}\t{message}", o.id);
+        }
+        s
+    }
+
+    /// The oracle's token line of every score it accepted: id, tokens.
+    fn structure_tsv(&self) -> String {
+        let mut s = String::new();
+        for o in &self.outcomes {
+            if let Some(tokens) = o.oracle.as_ref().and_then(|v| v.structure.as_ref()) {
+                let _ = writeln!(s, "{}\t{tokens}", o.id);
+            }
         }
         s
     }
@@ -371,6 +410,37 @@ impl Report {
             for (shape, list) in shapes {
                 let ids: Vec<String> = list.iter().take(5).map(|o| o.id.to_string()).collect();
                 let _ = writeln!(s, "| `{}` | {} | {} |", shape.replace('`', "'").replace('|', "\\|"), list.len(), ids.join(", "));
+            }
+        }
+
+        // What both accept: do they hold the same notes, bars and clefs?
+        let mut compared = 0usize;
+        let mut causes: BTreeMap<String, Vec<(u32, String)>> = BTreeMap::new();
+        for o in &self.outcomes {
+            let theirs = o.oracle.as_ref().and_then(|v| v.structure.as_ref());
+            if let (Some(ours), Some(theirs)) = (&o.structure, theirs) {
+                compared += 1;
+                if let Some((cause, tokens)) = structure::difference(ours, theirs) {
+                    causes.entry(cause).or_default().push((o.id, tokens));
+                }
+            }
+        }
+        if compared > 0 {
+            let different: usize = causes.values().map(Vec::len).sum();
+            let same = compared - different;
+            let _ = writeln!(s, "\n### The scores both accept\n");
+            let _ = writeln!(
+                s,
+                "Clefs, notes with their pitch and kind, bars, custodes and line breaks, in order: {same} of {compared} scores are the same ({:.2}%).\n",
+                100.0 * same as f64 / compared as f64
+            );
+            let _ = writeln!(s, "| where they first part | scores | examples (ours / Gregorio's) |\n|---|---:|---|");
+            let mut causes: Vec<_> = causes.iter().collect();
+            causes.sort_by_key(|(_, list)| std::cmp::Reverse(list.len()));
+            for (cause, list) in causes {
+                let examples: Vec<String> =
+                    list.iter().take(4).map(|(id, tokens)| format!("{id}: {}", tokens.replace('|', "\\|"))).collect();
+                let _ = writeln!(s, "| {} | {} | {} |", cause.replace('|', "\\|"), list.len(), examples.join(", "));
             }
         }
 
@@ -576,7 +646,9 @@ mod tests {
     #[test]
     fn disagreements_with_the_oracle_are_listed_by_cause() {
         let score = |source: &str| ScoreFile { source: source.to_string(), dropped_tex: false };
-        let said = |accepted, message: &str| Some(OracleVerdict { accepted, message: message.to_string() });
+        let said = |accepted, message: &str| {
+            Some(OracleVerdict { accepted, message: message.to_string(), structure: accepted.then(|| String::from("c4 fv")) })
+        };
         let mut report = Report { with_oracle: true, ..Report::default() };
         report.add(1, &score("%%\n(c4) A(f)"), said(true, ""));
         report.add(2, &score("%%\n(c4) A(?)"), said(true, ""));
@@ -589,5 +661,9 @@ mod tests {
         assert!(text.contains("| E011 | 1 |"), "{text}");
         assert!(text.contains("| `_ error: unrecognized thing _` | 1 | 3 |"), "{text}");
         assert!(report.verdicts_tsv().contains("2\treject\tE011\taccept\t\n"));
+        // Score 1 is accepted by both: we read a punctum where the oracle says virga.
+        assert!(text.contains("0 of 1 scores are the same"), "{text}");
+        assert!(text.contains("| kind `p` here, `v` there | 1 | 1: `fp` / `fv` |"), "{text}");
+        assert_eq!(report.structure_tsv(), "1\tc4 fv\n2\tc4 fv\n");
     }
 }

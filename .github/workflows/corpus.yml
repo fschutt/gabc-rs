@@ -42,3 +42,4 @@ jobs:
           path: |
             target/corpus/gregobase-report.md
             target/corpus/gregobase-verdicts.tsv
+            target/corpus/gregobase-structure.tsv

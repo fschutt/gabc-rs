@@ -4,6 +4,7 @@
 //! of exsurge (`third_party/exsurge/Exsurge.Glyphs.js`, MIT, © Fr. Matthew Spencer, OSJ).
 
 mod corpus;
+mod structure;
 mod svg_path;
 
 use std::path::{Path, PathBuf};
