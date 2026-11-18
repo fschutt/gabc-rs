@@ -195,8 +195,10 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
             for (row, text, centre) in &atom.lyrics {
                 let label = atom.labels.iter().find(|(r, _)| r == row).map_or(0.0, |(_, l)| label_width(l, measure, size));
                 let half = measure(text) * size / 2.0;
-                let end = text_end.get(*row).copied().unwrap_or(f32::MIN);
                 let gap = if hyphen.get(*row).copied().unwrap_or(false) { syllable_gap } else { word_gap };
+                // The first text of a bar may not hang out to the left of it: the bar before
+                // it ends with its own text and the gap after that.
+                let end = text_end.get(*row).copied().filter(|end| *end > f32::MIN).unwrap_or(-gap);
                 start = start.max(end + gap + label + half - centre);
             }
             atom.x = start;
@@ -857,6 +859,17 @@ mod tests {
         assert!(slur.x0 > heads[3].x && slur.x1 > heads[4].x, "{slur:?}");
         let html = crate::html::score(&e);
         assert_eq!(html.matches("<svg class=\"gabc-bow\"").count(), 2);
+    }
+
+    #[test]
+    fn the_words_of_two_bars_do_not_run_into_each_other() {
+        // Long syllables under short notes on both sides of a bar line.
+        let e = engraved("F G A | B A G |]\nw: a b schehnschehn Kreuzkreuz c d", 18.0);
+        let line = &e.lines[0];
+        let width = |text: &str| crate::layout::estimate_width(text) * e.lyric_size;
+        let before = line.lyrics.iter().find(|l| l.spans[0].text == "schehnschehn").unwrap();
+        let after = line.lyrics.iter().find(|l| l.spans[0].text == "Kreuzkreuz").unwrap();
+        assert!(after.x > before.x + width("schehnschehn"), "{before:?} {after:?}");
     }
 
     #[test]
