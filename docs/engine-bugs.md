@@ -1,6 +1,19 @@
 # Engine findings from the M0 spike
 
-Date: 2026-11-18. Engines: printpdf 0.12.9, azul-layout / azul-core / azul-css 0.0.17, allsorts-azul 0.17.2 (all from crates.io). Rule: each of these is fixed in the engine with a regression test there, not worked around in gabc-rs.
+Found on 2026-11-18 with printpdf 0.12.9, azul-layout / azul-core / azul-css 0.0.17 and allsorts-azul 0.17.2 from crates.io. Rule: each of these is fixed in the engine with a regression test there, not worked around in gabc-rs.
+
+## Status
+
+| # | Finding | Fix | State |
+|---|---|---|---|
+| E1 | SVG paths in a PDF: fills print as boxes, strokes are missing | strokes: [printpdf#298](https://github.com/fschutt/printpdf/pull/298); fills: [azul#484](https://github.com/fschutt/azul/pull/484) and printpdf branch `fix/svg-fills-in-pdf` | open for review |
+| E2 | PNG: text ink cut at its line box | [azul#484](https://github.com/fschutt/azul/pull/484) | open for review |
+| E3 | A line without text reports an unresolved font | [azul#484](https://github.com/fschutt/azul/pull/484) | open for review |
+| E4 | Page images get LCD colour fringes, no way to choose | [azul#484](https://github.com/fschutt/azul/pull/484) | open for review |
+| E5 | Background of an absolutely positioned `<span>` not painted | [azul#484](https://github.com/fschutt/azul/pull/484) | open for review |
+| | No public way to build a font from outlines | [allsorts-azul#3](https://github.com/fschutt/allsorts-azul/pull/3) | open for review |
+
+`Cargo.toml` patches the engines to these branches, pinned by revision. With them, `spike/cases/svg-path-fill.html` and `spike/cases/text-ink-clip.html` render the same in the PDF and in the PNG. The sections below describe each finding as it was found.
 
 How to reproduce any case:
 
@@ -60,17 +73,25 @@ Proposed fix, for review before I write it: give the text item one rectangle per
 
 ## E3. Every `<svg>` element produces a text run without a font
 
-## E3. Every `<svg>` element produces a text run without a font
+## E3. A line without text reports an unresolved font
 
-Each `<svg>` in a document prints, in debug builds, `dropping a TextLayout with FontHash::invalid()` once per render. A document without `<svg>` prints none. Harmless today, since the item is dropped, but something creates an empty text layout for an SVG element. Not yet traced.
+Each inline `<svg>` in a document printed, in debug builds, `dropping a TextLayout with FontHash::invalid()` once per render. It is not about SVG: any block whose line holds only an inline-level box and no text (an inline-block, an inline `<svg>`) did it, and a block-level `<svg>` did not. `paint_inline_content` built a `TextLayout` for a line with no glyph runs, with no font to give it, and `push_item` dropped it again with that report. SVG `<text>` itself draws correctly with the registered font in both renderers.
+
+Fix: the item is not built when the line has no glyph runs.
 
 ## E4. PNG: no way to ask for grayscale text anti-aliasing
 
-`render_pages` draws text with LCD subpixel anti-aliasing on desktop targets, which leaves colour fringes in an exported image. The only switch is the environment variable `AZ_TEXT_AA=grayscale` (`layout/src/cpurender/raster.rs`), which does not exist in WASM. `PageRenderOptions` needs a text anti-aliasing field; a page image has no subpixel layout.
+`render_pages` drew text with LCD subpixel anti-aliasing on desktop targets, which leaves colour fringes in an exported image. The only switch was the environment variable `AZ_TEXT_AA=grayscale`, read once into a process-wide cache in the rasteriser, which does not exist in WASM.
+
+Fix: the text anti-aliasing variables are read in one place (`TextAaSettings::from_env`), the value is carried by the glyph cache, and `PageRenderOptions` has a `text_aa` field. The spike passes `TextAaSettings::grayscale()`.
 
 ## E5. Background of an absolutely positioned `<span>` is not painted
 
-Case: first row and last row of `spike/cases/text-ink-clip.html`. The spans have a `background`, and neither renderer paints it, while the same on a `<div>` or `<p>` works. gabc-rs does not need this, so it is recorded here and not on our critical path.
+Case: first row and last row of `spike/cases/text-ink-clip.html`. The spans have a `background`, and neither renderer painted it, while the same on a `<div>` or `<p>` worked.
+
+Cause: a node's own background is skipped when its specified `display` is inline and its parent runs inline layout, on the assumption that the parent's line paints it. An absolutely positioned span is out of flow and on no line.
+
+Fix: `parent_paints_as_inline_shape` answers no for `absolute` and `fixed` boxes. It is in the display list builder, so it applies to both renderers.
 
 ## Added to allsorts-azul
 
