@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use azul_css::props::basic::{ColorU, FontRef};
-use azul_layout::cpurender::{render_pages, PageRenderOptions};
+use azul_layout::cpurender::{render_pages, PageRenderOptions, TextAaSettings};
 use azul_layout::font_traits::FontManager;
 use azul_layout::solver3::page_breaks::BreakPolicy;
 use printpdf::{Base64OrRaw, GeneratePdfOptions, PdfDocument, PdfSaveOptions};
@@ -285,6 +285,8 @@ fn render_png(html: &str, fonts: &Fonts) -> Result<(Vec<u8>, u32, u32), String> 
         background_color: ColorU { r: 255, g: 255, b: 255, a: 255 },
         first_page: 0,
         page_count: 3,
+        // A page image is saved and scaled: no LCD stripes.
+        text_aa: TextAaSettings::grayscale(),
     };
     let pixmap = render_pages(
         &styled_dom,
