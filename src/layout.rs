@@ -262,15 +262,16 @@ pub fn engrave(score: &Score, options: &Options) -> Engraving {
     let mut styles = Styles::default();
     let mut blocks = Vec::new();
     for (k, syllable) in score.syllables.iter().enumerate() {
-        let (spans, forced) = styles.read(&syllable.text);
-        let plain: String = spans.iter().map(|s| s.text.as_str()).collect();
+        let read = styles.read(&syllable.text);
+        let plain = read.plain();
         let empty = NoteGroup::default();
         let group = syllable.notes.as_ref().unwrap_or(&empty);
         let mut block = set_group(group);
         block.text = measure(&plain) * size;
         // The text stands with the middle of its vowel under the middle of the first note:
         // the part in `{...}` if there is one, else what the language says, else its middle.
-        let (start, len) = forced.or_else(|| vowel_segment(&plain)).unwrap_or((0, plain.len()));
+        let (start, len) = read.centre(&plain);
+        let spans = read.spans;
         let (before, upto) = (measure(&plain[..start]) * size, measure(&plain[..start + len]) * size);
         block.centre = before + (upto - before) / 2.0;
         block.allows_hyphen = !plain.is_empty() && score.syllables.get(k + 1).is_some_and(|next| !next.starts_word && !next.text.is_empty());
@@ -740,13 +741,14 @@ impl Styles {
     /// Reads a syllable's text as written into spans of plain text. With them comes the part
     /// that was written in `{...}`, as where it starts in the plain text and how long it is:
     /// the text is to be centred on it.
-    fn read(&mut self, raw: &str) -> (Vec<Span>, Option<(usize, usize)>) {
+    fn read(&mut self, raw: &str) -> Read {
         let mut spans: Vec<Span> = Vec::new();
         let mut text = String::new();
         // How much plain text there is so far, and the part in braces.
         let mut plain_len = 0usize;
         let mut brace: Option<usize> = None;
         let mut forced: Option<(usize, usize)> = None;
+        let mut special: Vec<(usize, usize)> = Vec::new();
         let mut i = 0;
         let flush = |text: &mut String, spans: &mut Vec<Span>, s: &Styles, plain_len: &mut usize| {
             *plain_len += text.len();
@@ -785,7 +787,9 @@ impl Styles {
                         let close = format!("</{name}>");
                         let inner_end = rest.find(&close).unwrap_or(rest.len());
                         if name == "sp" {
-                            text.push_str(special(&rest[end + 1..inner_end]));
+                            let start = plain_len + text.len();
+                            text.push_str(special_character(&rest[end + 1..inner_end]));
+                            special.push((start, plain_len + text.len()));
                         }
                         i += (inner_end + close.len()).min(rest.len());
                         continue;
@@ -819,14 +823,35 @@ impl Styles {
             i += c.len_utf8();
         }
         flush(&mut text, &mut spans, self, &mut plain_len);
-        (spans, forced)
+        Read { spans, forced, special }
+    }
+}
+
+/// A syllable's text as read.
+struct Read {
+    /// The plain text in its styles.
+    spans: Vec<Span>,
+    /// The part written in `{...}`: where it starts in the plain text and how long it is.
+    forced: Option<(usize, usize)>,
+    /// The parts that came from `<sp>` codes, as ranges of the plain text.
+    special: Vec<(usize, usize)>,
+}
+
+impl Read {
+    fn plain(&self) -> String {
+        self.spans.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    /// The part of the plain text that stands under the middle of the first note.
+    fn centre(&self, plain: &str) -> (usize, usize) {
+        self.forced.or_else(|| vowel_segment(plain, &self.special)).unwrap_or((0, plain.len()))
     }
 }
 
 /// The character that a `<sp>` code stands for. These are the codes the format's description
 /// names; any other code is printed as it is written, since nothing says what it stands for.
 /// (The description also has `A/`, a barred A that is not in Unicode; it is left as written.)
-fn special(code: &str) -> &str {
+fn special_character(code: &str) -> &str {
     match code {
         "V/" => "\u{2123}",
         "R/" => "\u{211F}",
@@ -842,45 +867,43 @@ fn special(code: &str) -> &str {
 /// the first note: the part written in `{...}`, or what [`vowel_segment`] finds. For checking
 /// the centring against a reference.
 pub fn centred_part(raw: &str) -> (String, String) {
-    let (spans, forced) = Styles::default().read(raw);
-    let plain: String = spans.iter().map(|s| s.text.as_str()).collect();
-    let centre = forced
-        .or_else(|| vowel_segment(&plain))
-        .and_then(|(start, len)| plain.get(start..start + len))
-        .unwrap_or("")
-        .to_string();
+    let read = Styles::default().read(raw);
+    let plain = read.plain();
+    let (start, len) = read.centre(&plain);
+    let centre = plain.get(start..start + len).unwrap_or("").to_string();
     (plain, centre)
 }
 
 /// The letters of a syllable that stand under the middle of its first note, as where they
-/// start in the text and how many bytes they are.
+/// start in the text and how many bytes they are. `None` for an empty text.
 ///
-/// This is what Gregorio centres, observed with probes (`docs/gabc-observed.md`): the first
-/// vowel, where an `i` or `u` before another vowel counts as a consonant (qui, cui, iam,
-/// sanguis), together with the letter after it if the two are a diphthong (ae, au, oe, eu,
-/// ei, ay). exsurge's rule differs for `ui`, which it takes as a diphthong. A text with no
-/// vowel is centred as a whole, without the punctuation at its end.
-fn vowel_segment(text: &str) -> Option<(usize, usize)> {
-    const VOWELS: &str = "aeiouyáéíóúýàèìòùäëïöüæœǽ";
+/// This is what Gregorio centres. The rule was read off the 1.16 million syllables of the
+/// GregoBase library, of which it gives the same letters for 99.7% (`docs/gabc-observed.md`):
+/// the first run of vowels, where an `i` or `u` before another vowel counts as a consonant
+/// (qui, cui, iam, sanguis). A text with no vowel is centred as a whole. A character written
+/// as a `<sp>` code is no vowel, whatever it shows (`special` are those parts of the text).
+/// The vowels are the letters that Gregorio centres in that data; exsurge's rule differs
+/// (it takes `ui` as a diphthong and centres one vowel otherwise).
+fn vowel_segment(text: &str, special: &[(usize, usize)]) -> Option<(usize, usize)> {
+    const VOWELS: &str = "aeiouyáéíóúýàèìòùâêôëæœǽăąęơư";
     // Lower case, letter for letter, with where each letter starts in the text.
     let letters: Vec<(usize, char)> =
         text.char_indices().map(|(at, c)| (at, c.to_lowercase().next().unwrap_or(c))).collect();
     let end = |n: usize| letters.get(n).map_or(text.len(), |l| l.0);
-    let is_vowel = |n: usize| letters.get(n).is_some_and(|l| VOWELS.contains(l.1));
-    let Some(mut n) = (0..letters.len()).find(|&n| is_vowel(n)) else {
-        // No vowel: all of it, but not the punctuation that ends it.
-        let trimmed = text.trim_end_matches(['.', ',', ';', ':']).len();
-        return (!text.is_empty()).then_some((0, if trimmed > 0 { trimmed } else { text.len() }));
+    let is_vowel = |n: usize| {
+        letters.get(n).is_some_and(|l| VOWELS.contains(l.1) && !special.iter().any(|r| r.0 <= l.0 && l.0 < r.1))
     };
-    while matches!(letters[n].1, 'i' | 'u') && is_vowel(n + 1) {
-        n += 1;
+    let Some(mut first) = (0..letters.len()).find(|&n| is_vowel(n)) else {
+        return (!text.is_empty()).then_some((0, text.len()));
+    };
+    while matches!(letters[first].1, 'i' | 'u') && is_vowel(first + 1) {
+        first += 1;
     }
-    let second = letters.get(n + 1).map(|l| l.1);
-    let diphthong = matches!(
-        (letters[n].1, second),
-        ('a', Some('e' | 'é' | 'u' | 'y')) | ('á', Some('u')) | ('o', Some('e' | 'é')) | ('e' | 'é', Some('u' | 'i'))
-    );
-    Some((letters[n].0, end(n + 1 + usize::from(diphthong)) - letters[n].0))
+    let mut after = first + 1;
+    while is_vowel(after) {
+        after += 1;
+    }
+    Some((letters[first].0, end(after) - letters[first].0))
 }
 
 /// A rough width of text in em, for when no font is at hand.
@@ -959,37 +982,48 @@ mod tests {
     #[test]
     fn text_is_read_with_its_styles_and_special_characters() {
         let mut styles = Styles::default();
-        let (spans, forced) = styles.read("<i>Ps.</i> <sp>V/</sp>. a{e}$(x<v>\\tex</v>");
-        let texts: Vec<(&str, bool)> = spans.iter().map(|s| (s.text.as_str(), s.italic)).collect();
+        let read = styles.read("<i>Ps.</i> <sp>V/</sp>. a{e}$(x<v>\\tex</v>");
+        let texts: Vec<(&str, bool)> = read.spans.iter().map(|s| (s.text.as_str(), s.italic)).collect();
         assert_eq!(texts, [("Ps.", true), (" \u{2123}. ae(x", false)]);
         // The part in braces, in the plain text: the `e`.
-        let plain: String = spans.iter().map(|s| s.text.as_str()).collect();
-        let (start, len) = forced.unwrap();
+        let plain = read.plain();
+        let (start, len) = read.forced.unwrap();
         assert_eq!(&plain[start..start + len], "e");
         // A code that the format's description does not name is printed as written.
-        assert_eq!(styles.read("<sp>A/</sp>").0[0].text, "A/");
+        assert_eq!(styles.read("<sp>A/</sp>").spans[0].text, "A/");
         // A style lasts into the next syllable.
         styles.read("<b>one");
-        assert!(styles.read("two").0[0].bold);
+        assert!(styles.read("two").spans[0].bold);
     }
 
     #[test]
-    fn the_vowel_of_a_syllable() {
-        fn vowel(text: &str) -> Option<&str> {
-            vowel_segment(text).map(|(start, len)| &text[start..start + len])
+    fn the_letters_under_the_first_note() {
+        fn centre(raw: &str) -> String {
+            centred_part(raw).1
         }
         // Every pair is what Gregorio centres for that syllable.
-        for (syllable, centre) in [
+        for (syllable, centred) in [
             ("Dó", "ó"), ("mi", "i"), ("nus", "u"), ("quo", "o"), ("qui", "i"), ("guis", "i"), ("ius", "u"),
             ("iam", "a"), ("ia", "a"), ("cui", "i"), ("cuí", "í"), ("uí", "í"), ("huic", "i"), ("cae", "ae"),
             ("lau", "au"), ("coe", "oe"), ("eu", "eu"), ("seu", "eu"), ("hei", "ei"), ("áu", "áu"), ("aé", "aé"),
             ("oé", "oé"), ("quae", "ae"), ("guae", "ae"), ("cœ", "œ"), ("præ", "æ"), ("ǽ", "ǽ"), ("Æ", "Æ"),
             ("y", "y"), ("Ie", "e"), ("ju", "u"), ("um", "u"), ("AL", "A"), ("Ísra", "Í"), ("qu", "u"),
-            ("str", "str"), ("*", "*"), ("Ps.", "Ps"), ("et.", "e"),
+            ("et.", "e"),
+            // Any run of vowels, in any language.
+            ("thou", "ou"), ("teous", "eou"), ("praise", "ai"), ("ya.", "ya"), ("Chúa", "úa"), ("muôn", "ô"),
+            ("lê", "ê"), ("thương", "ươ"),
+            // No vowel: all of it, punctuation too.
+            ("str", "str"), ("*", "*"), ("Ps.", "Ps."), ("2.", "2."), ("T. P.", "T. P."),
+            // A special character is no vowel, so this syllable has none ...
+            ("s<sp>'ae</sp>", "sǽ"),
+            // ... and here the `u` is the only one.
+            ("qu<sp>ae</sp>", "u"),
+            // What is written in braces is taken as it is.
+            ("lú{ia}.", "ia"),
         ] {
-            assert_eq!(vowel(syllable), Some(centre), "{syllable}");
+            assert_eq!(centre(syllable), centred, "{syllable}");
         }
-        assert_eq!(vowel(""), None);
+        assert_eq!(centre(""), "");
     }
 
     #[test]

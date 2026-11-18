@@ -92,6 +92,34 @@ pub fn gregobase(root: &Path, oracle: Oracle) -> Result<(), String> {
     Ok(())
 }
 
+/// Checks the centring rule against a `gregobase-centres.tsv` of an earlier run: every
+/// different syllable with the letters Gregorio centres and how often it occurs. The file
+/// has the text as printed, so what a `{...}` or a `<sp>` code changed shows as a difference.
+pub fn centres(path: &Path) -> Result<(), String> {
+    let data = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (mut all, mut same) = (0usize, 0usize);
+    let mut differ: Vec<(usize, String)> = Vec::new();
+    for line in data.lines().skip(1) {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let [text, theirs, times] = fields[..] else { continue };
+        let times: usize = times.parse().unwrap_or(0);
+        // `$` would be read as an escape; the file has the text after escapes.
+        let ours = gabc_rs::layout::centred_part(&text.replace('$', "$$")).1;
+        all += times;
+        if ours == theirs {
+            same += times;
+        } else {
+            differ.push((times, format!("`{text}`: ours `{ours}`, Gregorio `{theirs}`")));
+        }
+    }
+    differ.sort_by(|a, b| b.0.cmp(&a.0));
+    println!("{same} of {all} syllables have the same letters centred ({:.3}%)", 100.0 * same as f64 / all.max(1) as f64);
+    for (times, what) in differ.iter().take(30) {
+        println!("{times:>6}  {what}");
+    }
+    Ok(())
+}
+
 /// What the reference program said about one file.
 #[derive(Clone)]
 struct OracleVerdict {

@@ -51,21 +51,19 @@ The second source is the reference run (`Corpus` workflow): all 18,740 GregoBase
 
 ## Which letters stand under the first note
 
-Gregorio's dump marks the letters of a syllable that it centres under the first note. Every row was probed; `layout::vowel_segment` gives the same.
+Gregorio's dump marks the letters of a syllable that it centres under the first note. The reference run saves them for every syllable of the library (`gregobase-centres.tsv`: 19,790 different syllables, 1,158,865 occurrences), and the rule in `layout::vowel_segment` was read off that data:
 
-| Syllable | Centred | |
-|---|---|---|
-| `Dó` `mi` `nus` `um` `AL` `Ísra` | `ó` `i` `u` `u` `A` `Í` | the first vowel |
-| `quo` `qui` `guis` `cui` `cuí` `uí` `huic` | `o` `i` `i` `i` `í` `í` `i` | a `u` before another vowel is a consonant |
-| `ius` `iam` `ia` `Ie` | `u` `a` `a` `e` | so is an `i` before another vowel |
-| `cae` `quae` `guae` `aé` | `ae` `ae` `ae` `aé` | a diphthong is centred whole |
-| `lau` `áu` `coe` `oé` `eu` `seu` `hei` | `au` `áu` `oe` `oé` `eu` `eu` `ei` | |
-| `cœ` `præ` `ǽ` `Æ` `y` | `œ` `æ` `ǽ` `Æ` `y` | |
-| `qu` | `u` | with no vowel after it, the `u` is one |
-| `str` `*` | `str` `*` | no vowel: the whole text |
-| `Ps.` `1.` `et.` | `Ps` `1` `e` | punctuation at the end stays outside |
+- the first run of vowels of the syllable is centred: `Dó` → `ó`, `cae` → `ae`, `lau` → `au`, `thou` → `ou`, `teous` → `eou`, `Chúa` → `úa`;
+- an `i` or `u` before another vowel is a consonant: `qui` → `i`, `quo` → `o`, `cui` → `i`, `huic` → `i`, `ius` → `u`, `iam` → `a`, `muôn` → `ô`;
+- a syllable without a vowel is centred whole, its punctuation too: `Ps.`, `2.`, `T. P.`, `*`;
+- a character written as a `<sp>` code is no vowel: `s<sp>'ae</sp>` is centred whole, in `qu<sp>ae</sp>` the `u`;
+- what is written in `{...}` is centred as it is: `lú{ia}.` → `ia`.
 
-exsurge, whose line layout gabc-rs otherwise follows, takes `ui` as a diphthong (`qui` centred on `ui`). Gregorio's reading is used.
+`cargo run -p xtask -- corpus gregobase --centres <gregobase-centres.tsv>` checks the rule against the data: it gives the same letters for 99.69% of the occurrences. The file has the text as printed, without braces and codes, so most of the rest are the last two cases (`ia.` 1,027 times, `s'ae` 264 times). Known real differences are rare: `léi` → `é` (18 times), and Greek, whose vowels are not in the rule.
+
+The vowels are the letters Gregorio centres in that data: `a e i o u y`, with acute, grave and circumflex, `ë æ œ ǽ ă ą ę ơ ư`.
+
+exsurge, whose line layout gabc-rs otherwise follows, centres one vowel or a Latin diphthong and takes `ui` as one; Gregorio's reading is used.
 
 ## The first syllable
 
