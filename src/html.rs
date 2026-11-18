@@ -16,15 +16,16 @@ pub const NEUME_FAMILY: &str = "Gabc Neumes";
 pub const MUSIC_FAMILY: &str = "Gabc Music";
 
 /// The style rules that [`score`] relies on, in black. `size` is the font size of the score
-/// with its unit (one em is four staff spaces): `"34px"`.
-pub fn style(size: &str, lyric_size: f32) -> String {
-    style_in(size, lyric_size, "#000000")
+/// with its unit (one em is four staff spaces): `"34px"`. The size of the lyrics is written
+/// with each of them, so one set of rules serves chant and hymns on the same page.
+pub fn style(size: &str) -> String {
+    style_in(size, "#000000")
 }
 
 /// [`style`] with the colour of the ink given, for a page that has its own: `"currentColor"`
 /// follows the text around the score, in a dark theme too. `size` may be any CSS length, such
 /// as `"min(40px, calc(100cqw / 18.6))"` for a score that is as wide as its container.
-pub fn style_in(size: &str, lyric_size: f32, ink: &str) -> String {
+pub fn style_in(size: &str, ink: &str) -> String {
     format!(
         ".gabc-score {{ font-size: {size}; color: {ink}; }}\n\
          .gabc-line {{ position: relative; width: 100%; break-inside: avoid; page-break-inside: avoid; }}\n\
@@ -32,7 +33,7 @@ pub fn style_in(size: &str, lyric_size: f32, ink: &str) -> String {
          .gabc-g {{ position: absolute; font-family: \"{NEUME_FAMILY}\"; font-size: 1em; line-height: 1; }}\n\
          .gabc-m {{ position: absolute; font-family: \"{MUSIC_FAMILY}\"; font-size: 1em; line-height: 1; }}\n\
          .gabc-bow {{ position: absolute; overflow: visible; }}\n\
-         .gabc-ly {{ position: absolute; font-size: {lyric_size}em; line-height: 1; white-space: nowrap; }}\n\
+         .gabc-ly {{ position: absolute; line-height: 1; white-space: nowrap; }}\n\
          .gabc-sc {{ font-variant: small-caps; }}\n\
          .gabc-c {{ color: #b00000; }}\n"
     )
@@ -133,7 +134,7 @@ fn line(out: &mut String, line: &Line, engraving: &Engraving, ink: &str) {
         // score's em are divided by the size of the lyrics.
         let _ = write!(
             out,
-            "<span class=\"gabc-ly\" style=\"left:{:.4}em;top:{:.4}em\">",
+            "<span class=\"gabc-ly\" style=\"font-size:{size}em;left:{:.4}em;top:{:.4}em\">",
             lyric.x / size,
             line.lyric_row_y(lyric.row, size) / size
         );
@@ -172,7 +173,7 @@ pub fn document(engraving: &Engraving, title: &str, text_family: &str, size: &st
          {}</style></head><body>\n<h1>{}</h1>\n{}</body></html>\n",
         escape(title),
         escape(text_family),
-        style(size, engraving.lyric_size),
+        style(size),
         escape(title),
         score(engraving)
     )
