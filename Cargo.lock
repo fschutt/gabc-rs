@@ -99,9 +99,9 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "azul-core"
-version = "0.0.19"
+version = "0.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be72b0f33a6f56c9b3ae5596b68dceb9db430df6502f04c0f2db8b1d79c106ba"
+checksum = "50a58134c82af69ad019b2c3a2fd7fedfbc489bc42ee7a0225517c94aa0a49c2"
 dependencies = [
  "azul-css",
  "gl-context-loader",
@@ -111,9 +111,9 @@ dependencies = [
 
 [[package]]
 name = "azul-css"
-version = "0.0.19"
+version = "0.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9986be07791b91bdbeb9a04cb2bdb0d0626e1008ea9f9fed8c82b726007eee8b"
+checksum = "ab384d70977890bcd43da8525b14a46ca87ef252f9c5a221f40dab8694de61d1"
 dependencies = [
  "azul-simplecss",
  "libm",
@@ -121,9 +121,9 @@ dependencies = [
 
 [[package]]
 name = "azul-layout"
-version = "0.0.19"
+version = "0.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fad1d2151a9a1f4bc52683b95d009e29033cca3d4c2c5ebf4f171545627687e4"
+checksum = "f157c48d956d84695fedf3c88161a5fed05b8f51b8ce717c989a5f23456a66af"
 dependencies = [
  "agg-rust-azul",
  "allsorts-azul 0.17.2",
@@ -711,9 +711,9 @@ checksum = "4a6394b9e965e73d0a289ee54f589087e2c676aedf60885baf52c76b771e4958"
 
 [[package]]
 name = "printpdf"
-version = "0.12.12"
+version = "0.12.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccbce5ba98f55152e6c0e5ea0fc44ae75d7decd992352f595f9aa645443f4e33"
+checksum = "b829a46db10ef3d3a2496546b317ca7fd715fd95d826430174ba0f6d49dfa590"
 dependencies = [
  "allsorts-azul 0.17.2",
  "azul-core",
