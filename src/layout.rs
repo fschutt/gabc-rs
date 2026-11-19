@@ -874,6 +874,25 @@ pub fn centred_part(raw: &str) -> (String, String) {
     (plain, centre)
 }
 
+/// The words under the notes of a chant as running text: the syllables of a word joined, the
+/// styles and the braces of the source left out.
+pub fn words(score: &Score) -> String {
+    let mut styles = Styles::default();
+    let mut text = String::new();
+    for syllable in &score.syllables {
+        let plain = styles.read(&syllable.text).plain();
+        let plain = plain.trim();
+        if plain.is_empty() {
+            continue;
+        }
+        if syllable.starts_word && !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(plain);
+    }
+    text
+}
+
 /// The letters of a syllable that stand under the middle of its first note, as where they
 /// start in the text and how many bytes they are. `None` for an empty text.
 ///
@@ -931,6 +950,13 @@ mod tests {
         let parsed = parse(source);
         assert!(parsed.is_valid(), "{:?}", parsed.diagnostics);
         engrave(&parsed.score, &Options { width, ..Options::default() })
+    }
+
+    #[test]
+    fn the_words_of_a_chant_are_read_as_running_text() {
+        let parsed = parse("%%\n(c4) KY(f)ri(gh)e(h.) (,) <i>e</i>(f)lé(g)i(f)son.(f.) (::)");
+        assert!(parsed.is_valid(), "{:?}", parsed.diagnostics);
+        assert_eq!(words(&parsed.score), "KYrie eléison.");
     }
 
     #[test]

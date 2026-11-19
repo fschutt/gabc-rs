@@ -127,7 +127,7 @@ pub fn engrave(tune: &Tune, options: &Options) -> Engraving {
                     for (row, lyrics) in line.lyrics.iter().enumerate() {
                         if let Some(slot) = lyrics.slots.get(note_index) {
                             if let SlotKind::Syllable { text, hyphen } = &slot.kind {
-                                let (label, text) = split_label(text);
+                                let (label, text) = crate::abc::split_verse_label(text);
                                 if let Some(label) = label {
                                     if shown.len() <= row {
                                         shown.resize(row + 1, String::new());
@@ -423,15 +423,6 @@ fn place(line: &mut Line, atom: &Atom, x: f32, measure: &dyn Fn(&str) -> f32, si
             });
         }
         line.lyrics.push(Lyric { x: left, row: *row, spans: vec![Span { text: text.clone(), ..Span::default() }] });
-    }
-}
-
-/// Splits a verse number off a syllable: `1.\u{a0}Lo` is the label `1.` and the text `Lo`.
-/// A label starts with a digit and ends at the last no-break space.
-fn split_label(text: &str) -> (Option<&str>, &str) {
-    match text.rfind('\u{a0}') {
-        Some(at) if text.starts_with(|c: char| c.is_ascii_digit()) => (Some(&text[..at]), &text[at + '\u{a0}'.len_utf8()..]),
-        _ => (None, text),
     }
 }
 

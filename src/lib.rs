@@ -34,6 +34,22 @@ pub fn render(
     render_in(language, source, options, "#000000")
 }
 
+/// The words under the notes, verse by verse, as running text (see [`abc::Tune::verses`] and
+/// [`layout::words`]). A chant has one verse. For telling which part of a text printed
+/// beside the melody is already in it.
+pub fn verses(language: markdown::Language, source: &str) -> Result<Vec<String>, Vec<Diagnostic>> {
+    match language {
+        markdown::Language::Abc => {
+            let parsed = abc::parse(source);
+            if parsed.is_valid() { Ok(parsed.tune.verses()) } else { Err(parsed.diagnostics) }
+        }
+        markdown::Language::Gabc => {
+            let parsed = gabc::parse(source);
+            if parsed.is_valid() { Ok(vec![layout::words(&parsed.score)]) } else { Err(parsed.diagnostics) }
+        }
+    }
+}
+
 /// [`render`] with the colour of the ink given: `"currentColor"` for a page with colours of
 /// its own, to go with the rules of [`html::style_in`].
 pub fn render_in(

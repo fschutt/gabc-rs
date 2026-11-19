@@ -268,6 +268,65 @@ pub enum SlotKind {
     Skip,
 }
 
+impl Tune {
+    /// The words under the notes, verse by verse, as running text: the syllables of a word
+    /// joined, also over the end of a music line, held and skipped notes left out, verse
+    /// numbers left out. The first entry is verse 1.
+    ///
+    /// Which verse a `w:` line belongs to: the one its number names (`2.~Die`), every verse of
+    /// a range (`1.–3.~Je-sus`, a line all of them sing), and without a number the line's
+    /// place under its music line (the second `w:` line is verse 2).
+    pub fn verses(&self) -> Vec<String> {
+        let mut verses: std::collections::BTreeMap<u32, (String, bool)> = std::collections::BTreeMap::new();
+        for line in &self.lines {
+            for (place, lyrics) in line.lyrics.iter().enumerate() {
+                let label = lyrics.slots.iter().find_map(|slot| match &slot.kind {
+                    SlotKind::Syllable { text, .. } => Some(split_verse_label(text).0),
+                    _ => None,
+                });
+                let (first, last) = label.flatten().and_then(verse_numbers).unwrap_or((place as u32 + 1, place as u32 + 1));
+                for verse in first..=last.max(first) {
+                    let (text, open) = verses.entry(verse).or_default();
+                    for (k, slot) in lyrics.slots.iter().filter(|slot| matches!(slot.kind, SlotKind::Syllable { .. })).enumerate() {
+                        let SlotKind::Syllable { text: syllable, hyphen } = &slot.kind else { continue };
+                        let syllable = if k == 0 { split_verse_label(syllable).1 } else { syllable };
+                        if !*open && !text.is_empty() {
+                            text.push(' ');
+                        }
+                        text.push_str(&syllable.replace('\u{a0}', " "));
+                        *open = *hyphen;
+                    }
+                }
+            }
+        }
+        verses.into_values().map(|(text, _)| text).collect()
+    }
+}
+
+/// Splits a verse number off a syllable: `1.\u{a0}Lo` is the label `1.` and the text `Lo`.
+/// A label starts with a digit and ends at the last no-break space.
+pub(crate) fn split_verse_label(text: &str) -> (Option<&str>, &str) {
+    match text.rfind('\u{a0}') {
+        Some(at) if text.starts_with(|c: char| c.is_ascii_digit()) => (Some(&text[..at]), &text[at + '\u{a0}'.len_utf8()..]),
+        _ => (None, text),
+    }
+}
+
+/// The verses a label names: `2.` is verse 2, `1.–3.` the verses 1 to 3. `None` if there is
+/// no number in it, or more than two.
+fn verse_numbers(label: &str) -> Option<(u32, u32)> {
+    let numbers: Vec<u32> = label
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse().ok())
+        .collect::<Option<_>>()?;
+    match numbers[..] {
+        [one] => Some((one, one)),
+        [first, last] => Some((first, last)),
+        _ => None,
+    }
+}
+
 /// The tune and everything that was found wrong with its source.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Parsed {
@@ -1029,6 +1088,33 @@ mod tests {
         assert_eq!(steps[8].2, Fraction::new(1, 8));
         assert_eq!(steps[9].2, Fraction::new(2, 1));
         assert_eq!(codes("X:1\nT:T\nM:none\nL:1/4\nK:C\nA5\n"), ["E212"]);
+    }
+
+    #[test]
+    fn the_words_of_each_verse_are_read_as_running_text() {
+        // A word goes on over the end of a music line, a held and a skipped note carry no
+        // text, a line numbered `1.–2.` is sung by both verses, and without a number the
+        // place of the `w:` line says which verse it is.
+        let tune = valid(
+            "X:1\nT:Test\nM:4/4\nL:1/4\nK:C\n\
+             C D E F | G A B c |\n\
+             w: 1.~Al-le Men-schen sin-gen wohl-ge-\n\
+             w: 2.~Vie-le Vö-gel flie-gen un-ver-\n\
+             c B A G | F E D C |\n\
+             w: mut im Chor, * sie sin-gen_\n\
+             w: zagt da-von, * sie flie-gen_\n\
+             C E G c | c G E C |]\n\
+             w: 1.–2.~la la la la la la la la!\n",
+        );
+        assert_eq!(
+            tune.verses(),
+            [
+                "Alle Menschen singen wohlgemut im Chor, sie singen la la la la la la la la!",
+                "Viele Vögel fliegen unverzagt davon, sie fliegen la la la la la la la la!",
+            ]
+        );
+        // No words, no verses.
+        assert!(valid(&format!("{HEAD}F G A |]\n")).verses().is_empty());
     }
 
     #[test]
